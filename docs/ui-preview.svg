@@ -1,30 +1,22 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="580" height="708" viewBox="0 0 580 708">
- <style>text{font-family:'Microsoft YaHei UI','Microsoft YaHei','Segoe UI',sans-serif;fill:#1f2937;font-size:14px}.small{font-size:12px;fill:#6b7280}.metric{font-size:20px;font-weight:600}.blue{fill:#2563eb}</style>
- <rect width="580" height="708" rx="12" fill="#f5f7fb"/>
- <text x="20" y="22" class="small">窗口尺寸固定</text><text x="550" y="22" class="small">×</text>
- <rect x="24" y="52" width="24" height="24" rx="5" fill="#2563eb"/>
- <rect x="29" y="57" width="14" height="14" rx="2" fill="none" stroke="white"/>
- <text x="58" y="75" font-size="22" font-weight="600">窗口尺寸固定</text>
- <rect x="476" y="54" width="80" height="26" rx="13" fill="#dcfce7"/>
- <text x="516" y="71" text-anchor="middle" style="fill:#15803d;font-size:12px">固定中</text>
- <text x="24" y="101" class="small">先调整目标窗口大小，再选取。无需填写数字。</text>
- <rect x="24" y="124" width="532" height="132" rx="10" fill="white" stroke="#e2e8f0"/>
- <text x="40" y="152" class="small">目标窗口</text><text x="40" y="180" font-size="17" font-weight="600">无标题 - 记事本</text>
- <text x="40" y="212" class="small">固定尺寸 · px</text><text x="290" y="212" class="small">当前尺寸 · px</text>
- <text x="40" y="244" class="metric">1023 × 790</text><text x="290" y="244" class="metric blue">1023 × 790</text>
- <rect x="24" y="272" width="532" height="48" rx="7" fill="#2563eb"/>
- <text x="290" y="301" text-anchor="middle" style="fill:white">按住拖到目标窗口 · 松开即可固定</text>
- <text x="24" y="353">或从窗口列表选择</text><text x="500" y="353" text-anchor="middle" class="small">刷新列表</text>
- <rect x="24" y="364" width="532" height="134" rx="9" fill="white" stroke="#e2e8f0"/>
- <rect x="28" y="370" width="524" height="31" fill="#eff6ff"/><rect x="28" y="370" width="3" height="31" fill="#2563eb"/>
- <text x="42" y="391" class="blue">无标题 - 记事本</text><text x="42" y="422">示例浏览器</text><text x="42" y="453">示例播放器</text>
- <rect x="24" y="512" width="532" height="38" rx="7" fill="#eff6ff" stroke="#bfdbfe"/>
- <text x="290" y="537" text-anchor="middle" class="blue">固定选中窗口</text>
- <rect x="24" y="564" width="171" height="38" rx="7" fill="white" stroke="#e2e8f0"/>
- <rect x="205" y="564" width="171" height="38" rx="7" fill="white" stroke="#e2e8f0"/>
- <text x="109" y="589" text-anchor="middle">解除固定</text><text x="290" y="589" text-anchor="middle">收起到托盘</text><text x="470" y="589" text-anchor="middle" class="small">退出</text>
- <path d="M24 609H556" stroke="#e2e8f0"/>
- <text x="24" y="639" class="small">固定中 · 可自由移动和最小化 · 关闭本程序即解除</text>
- <text x="24" y="678" class="small">Ctrl + Alt + Z 固定前台窗口　 ·　 Ctrl + Alt + U 解除</text>
- <text x="556" y="699" text-anchor="end" style="font-size:10px;fill:#9ca3af">界面示意 · 模拟窗口名</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="748" viewBox="0 0 880 748" role="img" aria-labelledby="title desc">
+<title id="title">窗口尺寸固定 v1.2.0 界面示意</title><desc id="desc">左侧添加和管理多个窗口，右侧显示屏幕与窗口尺寸并输入固定宽高。所有窗口名称和尺寸都是模拟数据。</desc>
+<style>text{font-family:'Microsoft YaHei UI','Noto Sans CJK SC',sans-serif;fill:#1f2937;font-size:14px}.muted{fill:#6b7280;font-size:12px}.metric{font-family:'Segoe UI',sans-serif;font-size:22px;font-weight:600}.blue{fill:#2563eb}.button{fill:#fff;stroke:#e2e8f0}.center{text-anchor:middle;dominant-baseline:middle}.small{font-size:12px}</style>
+<rect width="880" height="748" rx="10" fill="#f5f7fb"/><rect width="880" height="32" fill="#fff"/><text x="20" y="22" class="small">窗口尺寸固定</text><text x="850" y="22">×</text>
+<rect x="24" y="53" width="26" height="26" rx="5" fill="#2563eb"/><rect x="31" y="60" width="13" height="12" rx="2" fill="none" stroke="#fff" stroke-width="2"/>
+<text x="60" y="76" style="font-size:23px;font-weight:600">窗口尺寸固定</text><rect x="726" y="54" width="130" height="26" rx="13" fill="#dcfce7"/><text x="791" y="67" class="center small" style="fill:#15803d">启用 2 / 3</text>
+<text x="24" y="100" class="muted">选取即固定，可反复添加多个窗口；选中后也可手动输入宽、高。</text>
+<rect x="24" y="128" width="832" height="48" rx="8" fill="#2563eb"/><text x="440" y="152" class="center" style="fill:#fff">按住拖到目标窗口 · 松开即可加入固定</text>
+<text x="24" y="222" class="muted">可选窗口 · Ctrl / Shift 多选</text><text x="383" y="218" class="center muted">刷新列表</text>
+<rect x="24" y="240" width="416" height="182" rx="8" class="button"/><rect x="28" y="243" width="408" height="30" fill="#eff6ff"/><text x="42" y="264" class="blue">示例文档 - 记事本</text><text x="42" y="295">示例网页 - 浏览器</text><text x="42" y="326">示例视频 - 播放器</text>
+<rect x="24" y="428" width="416" height="34" rx="7" fill="#eff6ff" stroke="#bfdbfe"/><text x="232" y="445" class="center blue">加入固定 · 所选窗口</text>
+<text x="24" y="482" class="muted">固定管理 · 多选后可只启用其中一部分</text><rect x="24" y="484" width="416" height="120" rx="8" class="button"/>
+<rect x="28" y="488" width="408" height="28" fill="#eff6ff"/><text x="38" y="508" class="small blue">[固定中] 示例文档 - 记事本 · 1000 × 700</text><text x="38" y="536" class="small">[最大化] 示例网页 - 浏览器 · 1936 × 1056</text><text x="38" y="564" class="small">[已暂停] 示例视频 - 播放器 · 960 × 540</text>
+<rect x="24" y="614" width="132" height="34" rx="7" class="button"/><rect x="166" y="614" width="132" height="34" rx="7" class="button"/><rect x="308" y="614" width="132" height="34" rx="7" class="button"/><text x="90" y="631" class="center">启用所选</text><text x="232" y="631" class="center">暂停所选</text><text x="374" y="631" class="center">移除所选</text>
+<rect x="24" y="658" width="132" height="32" rx="7" class="button"/><rect x="166" y="658" width="132" height="32" rx="7" class="button"/><rect x="308" y="658" width="132" height="32" rx="7" class="button"/><text x="90" y="674" class="center">全部启用</text><text x="232" y="674" class="center">全部暂停</text><text x="374" y="674" class="center">收起到托盘</text>
+<rect x="460" y="196" width="396" height="448" rx="12" class="button"/><text x="480" y="226" class="muted">窗口详情 · 所有尺寸均为物理像素</text><text x="480" y="258" style="font-size:18px;font-weight:600">示例文档 - 记事本</text>
+<text x="480" y="298" class="muted">当前外部尺寸 · px</text><text x="662" y="298" class="muted">设定外部尺寸 · px</text><text x="480" y="331" class="metric blue">1000 × 700</text><text x="662" y="331" class="metric">1000 × 700</text>
+<text x="480" y="367" class="muted">可见外框：984 × 692 px</text><text x="480" y="405">屏幕分辨率：1920 × 1080 px</text><text x="480" y="435">最大化工作区：1920 × 1040 px</text>
+<text x="480" y="477" class="muted">外部宽度 · px</text><text x="606" y="477" class="muted">外部高度 · px</text><rect x="480" y="485" width="118" height="34" fill="#fff" stroke="#9ca3af"/><rect x="606" y="485" width="118" height="34" fill="#fff" stroke="#9ca3af"/><text x="490" y="508">1000</text><text x="616" y="508">700</text><rect x="732" y="485" width="104" height="34" rx="7" fill="#2563eb"/><text x="784" y="502" class="center" style="fill:#fff">应用尺寸</text>
+<rect x="480" y="535" width="356" height="34" rx="7" class="button"/><text x="658" y="552" class="center">使用此窗口的最大化尺寸</text><text x="480" y="599" class="muted">固定中 · 按设定宽高固定</text><text x="480" y="626" class="muted">外部尺寸含隐形边框；工作区已扣除任务栏。</text>
+<text x="460" y="677" class="muted">新尺寸已应用，仅修改当前查看的窗口。</text><text x="24" y="725" class="muted">Ctrl + Alt + Z 加入前台窗口 · Ctrl + Alt + U 解除前台窗口</text><text x="806" y="718" class="center muted">退出</text>
 </svg>
