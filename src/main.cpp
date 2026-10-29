@@ -20,11 +20,12 @@ constexpr int MaxTargets=32;
 struct Candidate { HWND hwnd; DWORD pid; };
 struct Target {
     HWND hwnd{}; DWORD pid{}; HANDLE process{};
-    int width{},height{};
-    bool enabled{},destroyed{},moving{},captureMax{},haveLog{},logMin{},logMax{},screenSized{};
+    int width{},height{},remaxAttempts{};
+    bool enabled{},destroyed{},moving{},movingTitle{},captureMax{},haveLog{},logMin{},logMax{},screenSized{};
+    bool haveGeometry{},geometryMin{},geometryMax{},remaxPending{};
     HWINEVENTHOOK objectHook{},systemHook{};
-    ULONGLONG lastAttempt{},mismatchSince{},settleUntil{},captureUntil{};
-    RECT logRect{};
+    ULONGLONG lastAttempt{},mismatchSince{},settleUntil{},captureUntil{},geometrySince{},remaxUntil{};
+    RECT logRect{},geometry{},moveStart{};
     wchar_t row[512]{};
 };
 static Target targets[MaxTargets];
@@ -102,7 +103,7 @@ static void StartDiagnostics() {
     for(wchar_t* p=path;*p;++p) if(*p==L'\r'||*p==L'\n') { *p=0; break; }
     if(!path[0]) return;
     logFile=CreateFileW(path,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
-    Log(L"START version=1.2.0");
+    Log(L"START version=1.2.1");
 }
 
 static RECT BadgeRect() {
@@ -170,13 +171,33 @@ static MONITORINFOEXW MonitorInfo(HWND h) {
     GetMonitorInfoW(MonitorFromWindow(h?h:mainWindow,MONITOR_DEFAULTTONEAREST),&info);
     return info;
 }
-static bool MaxSizeMatches(const Target& t,const RECT& r) {
-    if(r.right-r.left==t.width && r.bottom-r.top==t.height) return true;
+static bool ScreenDimensions(const Target& t) {
     auto m=MonitorInfo(t.hwnd);
-    // GetWindowRect includes invisible resize borders. Work-area or monitor
-    // dimensions entered by a user also mean a screen-sized fixed window.
-    return (t.width==m.rcWork.right-m.rcWork.left && t.height==m.rcWork.bottom-m.rcWork.top) ||
-        (t.width==m.rcMonitor.right-m.rcMonitor.left && t.height==m.rcMonitor.bottom-m.rcMonitor.top);
+    UINT targetDpi=dpiForWindow?dpiForWindow(t.hwnd):96;
+    using MetricsFunction=int (WINAPI*)(int,UINT);
+    static auto metrics=reinterpret_cast<MetricsFunction>(GetProcAddress(GetModuleHandleW(L"user32.dll"),"GetSystemMetricsForDpi"));
+    int borderX=metrics?metrics(SM_CXSIZEFRAME,targetDpi)+metrics(SM_CXPADDEDBORDER,targetDpi):GetSystemMetrics(SM_CXSIZEFRAME)+GetSystemMetrics(SM_CXPADDEDBORDER);
+    int borderY=metrics?metrics(SM_CYSIZEFRAME,targetDpi)+metrics(SM_CXPADDEDBORDER,targetDpi):GetSystemMetrics(SM_CYSIZEFRAME)+GetSystemMetrics(SM_CXPADDEDBORDER);
+    auto matches=[&](const RECT& r) {
+        int w=r.right-r.left,h=r.bottom-r.top;
+        return (t.width==w && t.height==h) ||
+            (t.width==w+2*borderX && t.height==h+2*borderY);
+    };
+    return matches(m.rcWork)||matches(m.rcMonitor);
+}
+static bool MaxSizeMatches(const Target& t,const RECT& r) {
+    // A captured maximized size is a mode, not just a rectangle. Never undo
+    // that mode because a frame/DPI/animation changed a few pixels.
+    if(t.screenSized||ScreenDimensions(t)) return true;
+    if(r.right-r.left==t.width && r.bottom-r.top==t.height) return true;
+    return false;
+}
+static bool FillsWorkArea(HWND h,const RECT& outer) {
+    auto m=MonitorInfo(h); RECT visible={};
+    if(FAILED(DwmGetWindowAttribute(h,DWMWA_EXTENDED_FRAME_BOUNDS,&visible,sizeof visible))) visible=outer;
+    // Covers the work area, allowing the system's invisible frame and rounding.
+    return visible.left<=m.rcWork.left+2 && visible.top<=m.rcWork.top+2 &&
+        visible.right>=m.rcWork.right-2 && visible.bottom>=m.rcWork.bottom-2;
 }
 static void FillInputs() {
     int i=FindTarget(detailWindow); RECT r={};
@@ -268,8 +289,31 @@ static void CALLBACK WindowEvent(HWINEVENTHOOK,DWORD event,HWND hwnd,LONG object
     if(event>=EVENT_OBJECT_CREATE && (object!=OBJID_WINDOW||child!=CHILDID_SELF)) return;
     auto& t=targets[i]; ULONGLONG now=GetTickCount64();
     if(event==EVENT_OBJECT_DESTROY) t.destroyed=true;
-    if(event==EVENT_SYSTEM_MOVESIZESTART) t.moving=true;
-    if(event==EVENT_SYSTEM_MOVESIZEEND) { t.moving=false; t.settleUntil=now+200; }
+    if(event==EVENT_SYSTEM_MOVESIZESTART) {
+        t.moving=true; t.movingTitle=false;
+        t.remaxPending=false; t.remaxAttempts=0;
+        GetWindowRect(hwnd,&t.moveStart);
+        POINT p; DWORD_PTR hit=0;
+        if(GetCursorPos(&p) && SendMessageTimeoutW(hwnd,WM_NCHITTEST,0,MAKELPARAM(p.x,p.y),SMTO_ABORTIFHUNG|SMTO_BLOCK,50,&hit))
+            t.movingTitle=hit==HTCAPTION;
+    }
+    if(event==EVENT_SYSTEM_MOVESIZEEND) {
+        t.moving=false; t.settleUntil=now+400;
+        POINT p; auto m=MonitorInfo(hwnd); RECT end={};
+        // Out-of-context events can arrive after the cursor has left the title.
+        // A translated rectangle of unchanged size also identifies a move.
+        bool translated=GetWindowRect(hwnd,&end) &&
+            end.right-end.left==t.moveStart.right-t.moveStart.left &&
+            end.bottom-end.top==t.moveStart.bottom-t.moveStart.top &&
+            (end.left!=t.moveStart.left || end.top!=t.moveStart.top);
+        if(t.enabled && !t.captureMax && !IsZoomed(hwnd) && (t.screenSized||ScreenDimensions(t)) && (t.movingTitle||translated) &&
+            GetCursorPos(&p) && p.x>=m.rcWork.left && p.x<m.rcWork.right &&
+            p.y>=m.rcMonitor.top && p.y<=m.rcWork.top+2) {
+            ShowWindowAsync(hwnd,SW_MAXIMIZE);
+            Log(L"TOP_EDGE_MAXIMIZE");
+        }
+        t.movingTitle=false;
+    }
     if(event==EVENT_SYSTEM_MINIMIZEEND) t.settleUntil=now+200;
     QueueCheck();
 }
@@ -290,24 +334,48 @@ static void CheckTargets() {
         RECT r; if(!GetWindowRect(t.hwnd,&r)) continue;
         bool min=IsIconic(t.hwnd)!=FALSE,max=IsZoomed(t.hwnd)!=FALSE;
         Observe(t,r,min,max);
+        if(!t.haveGeometry || !EqualRect(&r,&t.geometry) || min!=t.geometryMin || max!=t.geometryMax) {
+            t.geometry=r; t.geometryMin=min; t.geometryMax=max; t.geometrySince=now; t.haveGeometry=true;
+        }
+        bool stable=now-t.geometrySince>=300;
+        if(t.remaxPending) {
+            if(min||!t.enabled) { t.remaxPending=false; }
+            else if(!max && stable) {
+                t.remaxPending=false; ShowWindowAsync(t.hwnd,SW_MAXIMIZE); t.settleUntil=now+400;
+                Log(L"REAPPLY_MAXIMIZE"); soon=true; continue;
+            } else if(now<t.remaxUntil) { soon=true; continue; }
+            else { t.remaxPending=false; t.enabled=false; Status(L"目标未响应最大化位置修复，已暂停；可重新启用或检查目标权限。"); continue; }
+        }
         if(t.captureMax) {
-            if(max) {
+            if(max && stable && FillsWorkArea(t.hwnd,r)) {
                 t.width=r.right-r.left; t.height=r.bottom-r.top; t.captureMax=false; t.screenSized=true;
-                if(detailWindow==t.hwnd) FillInputs(); Status(L"已记录最大化尺寸。再次点击最大化或拖到顶部可正常铺满屏幕。");
+                if(detailWindow==t.hwnd) FillInputs(); Status(L"已记录稳定的最大化尺寸，并核对窗口铺满工作区。");
             } else if(now<t.captureUntil) { soon=true; continue; }
             else { t.captureMax=false; Status(L"目标未响应最大化，请检查目标程序是否支持最大化。"); }
         }
         if(!t.enabled||min||!IsWindowVisible(t.hwnd)||t.moving) { t.mismatchSince=0; continue; }
-        if(now<t.settleUntil || r.left<=-30000 || r.top<=-30000) { soon=true; continue; }
+        if(now<t.settleUntil || !stable || r.left<=-30000 || r.top<=-30000) { soon=true; continue; }
         // Matching maximized dimensions are valid. Never restore a maximized
         // window solely because IsZoomed is true (the v1.1 regression).
         bool wrong=max?!MaxSizeMatches(t,r):r.right-r.left!=t.width||r.bottom-r.top!=t.height;
-        if(!wrong) { t.mismatchSince=0; continue; }
+        bool repairMax=max && MaxSizeMatches(t,r) && !FillsWorkArea(t.hwnd,r);
+        if(repairMax) wrong=true;
+        if(!wrong) { t.mismatchSince=0; if(max) t.remaxAttempts=0; continue; }
         if(!t.mismatchSince) t.mismatchSince=now;
         DWORD interval=now-t.mismatchSince>3000?500:60;
         if(t.lastAttempt && now-t.lastAttempt<interval) { soon=true; continue; }
         t.lastAttempt=now; BOOL success;
-        if(max) {
+        if(repairMax) {
+            // Clear a malformed maximized placement through Windows itself.
+            // Wait for the restore to settle before issuing maximize again.
+            if(t.remaxAttempts>=2) {
+                t.enabled=false; Status(L"目标最大化后仍未覆盖工作区，已暂停该目标。可检查目标的尺寸限制后重新启用。"); continue;
+            }
+            ++t.remaxAttempts;
+            success=ShowWindowAsync(t.hwnd,SW_RESTORE);
+            t.remaxPending=success!=FALSE; t.remaxUntil=now+2500;
+            Log(L"REPAIR_MAXIMIZED_PLACEMENT");
+        } else if(max) {
             success=ShowWindowAsync(t.hwnd,SW_RESTORE); t.settleUntil=now+200;
             wchar_t text[128]; StringCchPrintfW(text,128,L"RESTORE_FROM_MAXIMIZED hwnd=%p",t.hwnd); Log(text);
         } else {
@@ -335,7 +403,8 @@ static bool LockWindow(HWND hwnd,DWORD expectedPid=0) {
     if(i==MaxTargets) { Status(L"最多同时管理 32 个窗口。请先移除不需要的目标。"); return false; }
     auto& t=targets[i]; t.hwnd=hwnd; t.pid=pid; t.enabled=true;
     t.width=r.right-r.left; t.height=r.bottom-r.top;
-    t.screenSized=IsZoomed(hwnd)!=FALSE;
+    t.screenSized=IsZoomed(hwnd)!=FALSE || ScreenDimensions(t);
+    if(IsZoomed(hwnd)) { t.captureMax=true; t.captureUntil=GetTickCount64()+2500; }
     t.process=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid);
     t.objectHook=SetWinEventHook(EVENT_OBJECT_DESTROY,EVENT_OBJECT_LOCATIONCHANGE,nullptr,WindowEvent,pid,0,WINEVENT_OUTOFCONTEXT|WINEVENT_SKIPOWNPROCESS);
     t.systemHook=SetWinEventHook(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_MINIMIZEEND,nullptr,WindowEvent,pid,0,WINEVENT_OUTOFCONTEXT|WINEVENT_SKIPOWNPROCESS);
@@ -380,7 +449,7 @@ static void ManageSelected(int action) {
         LRESULT i=SendMessageW(managedBox,LB_GETITEMDATA,indices[k],0); if(i<0||i>=MaxTargets) continue;
         auto& t=targets[i];
         if(action==ID_UNLOCK) ReleaseTarget(t);
-        else { t.enabled=action==ID_ENABLE; t.mismatchSince=0; t.lastAttempt=0; }
+        else { t.enabled=action==ID_ENABLE; t.captureMax=false; t.remaxPending=false; t.remaxAttempts=0; t.mismatchSince=0; t.lastAttempt=0; }
     }
     UpdateManaged(); UpdateDetail(true); QueueCheck();
     Status(action==ID_UNLOCK?L"已移除所选目标。其余窗口继续固定。":action==ID_ENABLE?L"已启用所选目标，恢复各自的固定尺寸。":L"已暂停所选目标，可自由调整；其他窗口继续固定。");
@@ -398,17 +467,16 @@ static void ApplySize(bool useMax) {
     if(!h||!IsWindow(h)) { Status(L"请先选择窗口。"); return; }
     if(FindTarget(h)<0 && !LockWindow(h)) return;
     int i=FindTarget(h); if(i<0) return; auto& t=targets[i];
-    t.enabled=true; t.mismatchSince=0; t.lastAttempt=0;
+    t.enabled=true; t.remaxPending=false; t.remaxAttempts=0; t.mismatchSince=0; t.lastAttempt=0;
     if(useMax) {
         t.captureMax=true; t.captureUntil=GetTickCount64()+2500;
         if(!ShowWindowAsync(h,SW_MAXIMIZE)) { t.captureMax=false; Status(L"无法最大化目标窗口，请检查目标权限。"); return; }
         Status(L"正在读取目标实际最大化尺寸…");
     } else {
         t.captureMax=false; t.width=w; t.height=height;
-        RECT current={}; auto m=MonitorInfo(h);
-        t.screenSized=(IsZoomed(h)&&GetWindowRect(h,&current)&&MaxSizeMatches(t,current)) ||
-            (w==m.rcWork.right-m.rcWork.left && height==m.rcWork.bottom-m.rcWork.top) ||
-            (w==m.rcMonitor.right-m.rcMonitor.left && height==m.rcMonitor.bottom-m.rcMonitor.top);
+        RECT current={};
+        t.screenSized=ScreenDimensions(t) ||
+            (IsZoomed(h)&&GetWindowRect(h,&current)&&w==current.right-current.left&&height==current.bottom-current.top);
         Status(L"新尺寸已应用并启用固定，仅修改当前查看的窗口。");
     }
     UpdateManaged(); UpdateDetail(true); QueueCheck();
@@ -676,7 +744,7 @@ static LRESULT CALLBACK MainProcedure(HWND hwnd,UINT message,WPARAM wp,LPARAM lp
         case ID_MANAGED: if(HIWORD(wp)==LBN_SELCHANGE) PreviewSelected(managedBox); break;
         case ID_UNLOCK: case ID_ENABLE: case ID_PAUSE: ManageSelected(LOWORD(wp)); break;
         case ID_ALL_ENABLE: case ID_ALL_PAUSE:
-            for(auto& t:targets) if(t.hwnd) { t.enabled=LOWORD(wp)==ID_ALL_ENABLE; t.lastAttempt=0; t.mismatchSince=0; }
+            for(auto& t:targets) if(t.hwnd) { t.enabled=LOWORD(wp)==ID_ALL_ENABLE; t.captureMax=false; t.remaxPending=false; t.remaxAttempts=0; t.lastAttempt=0; t.mismatchSince=0; }
             UpdateManaged(); QueueCheck(); Status(LOWORD(wp)==ID_ALL_ENABLE?L"已启用全部目标，各自恢复记录尺寸。":L"已暂停全部目标，固定尺寸记录仍保留。"); break;
         case ID_APPLY: ApplySize(false); break;
         case ID_MAXSIZE: ApplySize(true); break;

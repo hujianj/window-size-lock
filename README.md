@@ -18,7 +18,7 @@
 
 也可以双击“可选窗口”的一行，或按住 Ctrl / Shift 选择多行后点击“加入固定”。加入新窗口会保留其他目标；重复加入已有目标不会覆盖它的设定或产生重复记录。最多管理 **32 个窗口**，本版实测了两个同时管理的窗口。
 
-窗口可以自由移动。拖动过程中允许暂时改变尺寸；松开后等待 Windows 移动、缩放与吸附状态稳定，约 200 ms 后检查并恢复。最小化、隐藏或手动暂停时停止纠正，恢复显示并启用后继续固定。
+窗口可以自由移动。拖动过程中允许暂时改变尺寸；松开后等待 Windows 移动、缩放与吸附状态稳定再恢复：连续稳定至少 300 ms，移动或缩放结束另留 400 ms 缓冲。本机的一次缩放实测约 500 ms 后恢复，这不是所有电脑上的响应保证。最小化、隐藏或手动暂停时停止纠正，恢复显示并启用后继续固定。
 
 ## 手动修改宽、高
 
@@ -49,20 +49,24 @@
 
 | 项目 | 尺寸 |
 | --- | --- |
-| 屏幕分辨率 | 2344 × 1432 px |
-| 最大化工作区 | 2344 × 1384 px |
-| 经典记事本最大化后的外部尺寸 | 2360 × 1400 px |
-| 经典记事本最大化后的可见外框 | 2344 × 1384 px |
+| 屏幕分辨率 | 2362 × 1450 px |
+| 最大化工作区 | 2362 × 1402 px |
+| 经典记事本最大化后的外部尺寸 | 2378 × 1418 px |
+| 经典记事本最大化后的可见外框 | 2362 × 1402 px |
 
 要固定成某个窗口真正的最大化尺寸，选中它后点击 **“使用此窗口的最大化尺寸”**。程序会最大化这个窗口、读取它的实际外部尺寸并固定。也可以先最大化目标，再拖动选取或从列表加入。
 
-v1.2.0 修复了旧版“只要检测到最大化，就强制还原”的问题。当实际最大化尺寸匹配设定时，保留最大化状态；手动输入正好等于该屏幕分辨率或工作区的尺寸时，也允许系统最大化边框的差异。点击最大化按钮、拖到屏幕顶部都可以正常生效。固定普通小尺寸时，最大化仍会恢复到设定宽、高。
+v1.2.1 针对“尺寸已等于最大化尺寸，再次最大化却没有正确铺满”的反馈加强处理。读取最大化尺寸前，先等待窗口矩形和最小化/最大化状态连续稳定，并核对可见外框是否覆盖工作区。记录的最大化尺寸被视为屏幕尺寸模式，避免动画、边框或 DPI 的临时差异导致错误还原。手动输入工作区、屏幕尺寸或带系统隐形边框的尺寸，也允许系统最大化。
+
+尺寸相同不代表位置正确。如果窗口报告已最大化，但可见范围没有覆盖工作区，程序会先请求还原，等待稳定后再请求最大化，最多修复两次；目标不响应或持续限制位置时，暂停该目标并提示。普通状态的屏幕尺寸窗口移动到顶部时，另有请求最大化的兜底。固定普通小尺寸时，最大化仍会恢复到设定宽、高。
+
+最终发布文件在当前 Windows 11 的经典记事本上通过了点击最大化、顶部吸附、手动工作区尺寸、屏幕尺寸与最大化外部尺寸的验证。反馈中的旧版异常未在本机稳定复现；异常位置修复和顶部兜底分支未通过人为故障注入触发，不能把此次结果解释为所有程序和显示环境均已验证。详见[验证记录](docs/VALIDATION.md)。
 
 ## 轻量实现与资源
 
-界面使用 Windows 原生控件与 GDI，没有 Electron、WebView、.NET 或 Python 运行依赖。静态 C++ 运行库，v1.2.0 x64 EXE 为 **172,032 字节（168 KiB）**。
+界面使用 Windows 原生控件与 GDI，没有 Electron、WebView、.NET 或 Python 运行依赖。静态 C++ 运行库，v1.2.1 x64 EXE 为 **174,592 字节（170.5 KiB）**。
 
-通过 WinEvent 事件通知恢复尺寸，配合 1 秒检查兜底；常规纠正尝试间隔约 60 ms，持续冲突超过 3 秒后降至约 500 ms。后台收起、两个目标启用且静止的本机 20 秒采样：专用内存约 **3.00 MiB**，工作集约 **19.73 MiB**，CPU 时间增量约 **0.234 秒**，折合一个逻辑处理器约 **1.17%**。这些是具体样本，不代表所有电脑或持续拖动状态，详见[验证记录](docs/VALIDATION.md)。
+通过 WinEvent 事件通知恢复尺寸，配合 1 秒检查兜底及待稳定时的 80 ms 检查；常规纠正尝试间隔约 60 ms，持续冲突超过 3 秒后降至约 500 ms。旧版 v1.2.0 后台收起、两个目标启用且静止的本机 20 秒采样：专用内存约 **3.00 MiB**，工作集约 **19.73 MiB**，CPU 时间增量约 **0.234 秒**，折合一个逻辑处理器约 **1.17%**。这是历史样本，v1.2.1 未重新进行相同条件的资源采样，不能作为新版测量值或所有电脑的表现保证。详见[旧版记录](docs/VALIDATION-1.2.0.md)。
 
 ## 兼容范围
 
@@ -92,4 +96,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\src\build.ps1
 
 ## English
 
-A tiny, portable native Windows utility that captures and restores the outer size of selected windows. Manage up to 32 targets with independent sizes and selective or batch enable, pause and removal. Drag the blue picker onto a window, use the multi-select list, or press `Ctrl + Alt + Z`. Edit width and height and apply to the window shown in the detail pane. `Ctrl + Alt + U` removes only the foreground target. Moving is allowed; minimizing pauses enforcement. Matching maximized dimensions now remain maximized, including top-edge snap. The panel shows monitor resolution, work area, outer size and visible frame bounds. No external runtime or installation required. Windows 11 x64 tested with two targets; Windows 10 is intended but has not yet been tested on a physical system.
+A tiny, portable native Windows utility that captures and restores the outer size of selected windows. Manage up to 32 targets with independent sizes and selective or batch enable, pause and removal. Drag the blue picker onto a window, use the multi-select list, or press `Ctrl + Alt + Z`. Edit width and height and apply to the window shown in the detail pane. `Ctrl + Alt + U` removes only the foreground target. Moving is allowed; minimizing pauses enforcement. Version 1.2.1 waits for stable geometry and state, preserves screen-sized maximization and verifies visible work-area coverage with bounded placement repair. Maximize and top snap passed classic Notepad tests, but the reported old-version failure was not reliably reproduced and repair fallback branches were not fault-injection tested. The panel shows monitor resolution, work area, outer size and visible frame bounds. No external runtime or installation required. Windows 11 x64 tested with two targets; Windows 10 and mixed-DPI displays have not been physically tested.
