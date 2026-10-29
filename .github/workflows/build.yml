@@ -1,0 +1,20 @@
+name: Windows build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native x64 executable
+        shell: pwsh
+        run: ./src/build.ps1 -OutDir ./build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WindowSizeLock-x64
+          path: build/WindowSizeLock.exe
+          if-no-files-found: error

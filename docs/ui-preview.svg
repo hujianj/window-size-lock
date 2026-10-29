@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="580" height="708" viewBox="0 0 580 708">
+ <style>text{font-family:'Microsoft YaHei UI','Microsoft YaHei','Segoe UI',sans-serif;fill:#1f2937;font-size:14px}.small{font-size:12px;fill:#6b7280}.metric{font-size:20px;font-weight:600}.blue{fill:#2563eb}</style>
+ <rect width="580" height="708" rx="12" fill="#f5f7fb"/>
+ <text x="20" y="22" class="small">窗口尺寸固定</text><text x="550" y="22" class="small">×</text>
+ <rect x="24" y="52" width="24" height="24" rx="5" fill="#2563eb"/>
+ <rect x="29" y="57" width="14" height="14" rx="2" fill="none" stroke="white"/>
+ <text x="58" y="75" font-size="22" font-weight="600">窗口尺寸固定</text>
+ <rect x="476" y="54" width="80" height="26" rx="13" fill="#dcfce7"/>
+ <text x="516" y="71" text-anchor="middle" style="fill:#15803d;font-size:12px">固定中</text>
+ <text x="24" y="101" class="small">先调整目标窗口大小，再选取。无需填写数字。</text>
+ <rect x="24" y="124" width="532" height="132" rx="10" fill="white" stroke="#e2e8f0"/>
+ <text x="40" y="152" class="small">目标窗口</text><text x="40" y="180" font-size="17" font-weight="600">无标题 - 记事本</text>
+ <text x="40" y="212" class="small">固定尺寸 · px</text><text x="290" y="212" class="small">当前尺寸 · px</text>
+ <text x="40" y="244" class="metric">1023 × 790</text><text x="290" y="244" class="metric blue">1023 × 790</text>
+ <rect x="24" y="272" width="532" height="48" rx="7" fill="#2563eb"/>
+ <text x="290" y="301" text-anchor="middle" style="fill:white">按住拖到目标窗口 · 松开即可固定</text>
+ <text x="24" y="353">或从窗口列表选择</text><text x="500" y="353" text-anchor="middle" class="small">刷新列表</text>
+ <rect x="24" y="364" width="532" height="134" rx="9" fill="white" stroke="#e2e8f0"/>
+ <rect x="28" y="370" width="524" height="31" fill="#eff6ff"/><rect x="28" y="370" width="3" height="31" fill="#2563eb"/>
+ <text x="42" y="391" class="blue">无标题 - 记事本</text><text x="42" y="422">示例浏览器</text><text x="42" y="453">示例播放器</text>
+ <rect x="24" y="512" width="532" height="38" rx="7" fill="#eff6ff" stroke="#bfdbfe"/>
+ <text x="290" y="537" text-anchor="middle" class="blue">固定选中窗口</text>
+ <rect x="24" y="564" width="171" height="38" rx="7" fill="white" stroke="#e2e8f0"/>
+ <rect x="205" y="564" width="171" height="38" rx="7" fill="white" stroke="#e2e8f0"/>
+ <text x="109" y="589" text-anchor="middle">解除固定</text><text x="290" y="589" text-anchor="middle">收起到托盘</text><text x="470" y="589" text-anchor="middle" class="small">退出</text>
+ <path d="M24 609H556" stroke="#e2e8f0"/>
+ <text x="24" y="639" class="small">固定中 · 可自由移动和最小化 · 关闭本程序即解除</text>
+ <text x="24" y="678" class="small">Ctrl + Alt + Z 固定前台窗口　 ·　 Ctrl + Alt + U 解除</text>
+ <text x="556" y="699" text-anchor="end" style="font-size:10px;fill:#9ca3af">界面示意 · 模拟窗口名</text>
+</svg>

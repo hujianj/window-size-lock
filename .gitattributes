@@ -1,0 +1,9 @@
+* text=auto
+*.cpp text eol=crlf
+*.ps1 text eol=crlf
+*.rc text eol=crlf
+*.manifest text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.svg text eol=lf
+*.ico binary

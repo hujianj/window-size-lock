@@ -1,0 +1,10 @@
+src/bin/
+build/
+*.obj
+*.res
+*.exe
+*.zip
+*.log
+*.diagnostics
+.vs/
+*.user
