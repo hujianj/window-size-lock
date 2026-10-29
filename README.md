@@ -1,6 +1,6 @@
 # 窗口尺寸固定 · Window Size Lock
 
-把目标窗口调整到喜欢的大小，按住蓝色按钮拖到窗口上，松开即可固定。可以连续添加多个窗口，为每个窗口设定不同的宽、高，再单独或批量启用、暂停。
+把目标窗口调整到喜欢的大小，按住蓝色按钮拖到窗口上，松开即可固定。可以连续添加多个窗口，为每个窗口设定不同的宽、高，再单独或批量启用、暂停。记录自动保存，窗口关闭或工具退出后仍保留，重新打开匹配的窗口后自动连接。
 
 **Windows 10 / 11 · 原生 C++ / Win32 · 单个 EXE · 无需安装 · MIT 开源**
 
@@ -36,10 +36,26 @@
 - `Ctrl + Alt + U`：仅解除当前前台窗口，其他目标继续固定。
 - “收起到托盘”：后台继续固定。点击托盘图标或再次运行 EXE，唤回同一面板。
 - 托盘菜单“解除全部固定”：解除所有目标。
-- “退出”或右上角关闭：解除所有目标并退出。
-- “刷新列表”：更新可选窗口。关闭的目标会自动移除，其他目标保留。
+- “退出”或右上角关闭：停止本次固定并退出，保留所有记录。再次运行工具后自动连接匹配的窗口。
+- “刷新列表”：更新可选窗口。关闭的目标留在“固定管理”中等待重新打开。
 
-程序退出后不保留记录，下次运行需要重新选取。
+## 自动保存与重新打开
+
+从 **v1.3.0** 起，加入窗口、应用尺寸、启用、暂停和移除都会自动保存，无需点击保存按钮。
+
+1. 关闭目标窗口后，管理列表显示“等待窗口”，仍保留尺寸；暂停的记录显示“暂停·等待”。
+2. 重新打开相同窗口，工具按程序完整路径、窗口类型和窗口标题重新识别。唯一匹配时自动连接，启用的记录恢复设定尺寸，暂停的记录继续暂停。
+3. 退出并重新运行固定工具也会载入所有记录。可以先运行工具再打开目标，也可以先打开目标再运行工具。
+4. 窗口尚未打开时，也能在管理列表选择记录，修改宽、高并点击“应用尺寸”，或改变启用/暂停状态。
+5. 要永久取消记录，请点击“移除所选”。托盘“解除全部固定”删除全部记录；普通退出保留记录。
+
+例如固定 `配置.txt - 记事本` 为 `950 × 700`，关闭并重新打开它后自动恢复；`另一个.txt - 记事本` 可以保留独立的 `900 × 650`。经典记事本标题开头表示未保存修改的 `*` 不影响匹配。
+
+配置保存在当前 Windows 用户的 **`%LOCALAPPDATA%\WindowSizeLock\settings.dat`**。更换 EXE 所在文件夹或升级到新版不需要迁移配置；换电脑或 Windows 用户不会自动同步。关闭工具后可备份此文件。旧版没有保存功能，升级首次需要重新选取一次，无法恢复旧版已丢失的记录。工具本身不会自动开机运行，登录后需要启动它。
+
+匹配以窗口标题为准，不读取文档内容。标题改变时会更新当前已连接记录；重新打开时标题不同，需要重新选取。若多个窗口或记录的程序路径、类型、标题完全相同，不会任意自动选择；可手动选取目标，重复记录需先移除。不同目录的同名记事本文档若显示相同标题，工具无法区分其文档路径，建议使用不同文件名。程序路径变化、读取权限不足或没有标题也可能需要重新选取。
+
+配置使用先写临时文件再替换的方式，并校验版本、数量、尺寸和字符串。文件损坏或版本不支持时提示且拒绝载入；直接退出保留原文件，重新加入或修改设置会写入新配置。写入失败会提示并自动重试。
 
 ## 最大化与屏幕尺寸
 
@@ -49,10 +65,10 @@
 
 | 项目 | 尺寸 |
 | --- | --- |
-| 屏幕分辨率 | 2362 × 1450 px |
-| 最大化工作区 | 2362 × 1402 px |
-| 经典记事本最大化后的外部尺寸 | 2378 × 1418 px |
-| 经典记事本最大化后的可见外框 | 2362 × 1402 px |
+| 屏幕分辨率 | 2358 × 1432 px |
+| 最大化工作区 | 2358 × 1384 px |
+| 经典记事本最大化后的外部尺寸 | 2374 × 1400 px |
+| 经典记事本最大化后的可见外框 | 2358 × 1384 px |
 
 要固定成某个窗口真正的最大化尺寸，选中它后点击 **“使用此窗口的最大化尺寸”**。程序会最大化这个窗口、读取它的实际外部尺寸并固定。也可以先最大化目标，再拖动选取或从列表加入。
 
@@ -60,13 +76,13 @@ v1.2.1 针对“尺寸已等于最大化尺寸，再次最大化却没有正确�
 
 尺寸相同不代表位置正确。如果窗口报告已最大化，但可见范围没有覆盖工作区，程序会先请求还原，等待稳定后再请求最大化，最多修复两次；目标不响应或持续限制位置时，暂停该目标并提示。普通状态的屏幕尺寸窗口移动到顶部时，另有请求最大化的兜底。固定普通小尺寸时，最大化仍会恢复到设定宽、高。
 
-最终发布文件在当前 Windows 11 的经典记事本上通过了点击最大化、顶部吸附、手动工作区尺寸、屏幕尺寸与最大化外部尺寸的验证。反馈中的旧版异常未在本机稳定复现；异常位置修复和顶部兜底分支未通过人为故障注入触发，不能把此次结果解释为所有程序和显示环境均已验证。详见[验证记录](docs/VALIDATION.md)。
+v1.2.1 在 Windows 11 经典记事本上通过了点击最大化、顶部吸附、手动工作区尺寸、屏幕尺寸与最大化外部尺寸的历史验证，详见 [v1.2.1 记录](docs/VALIDATION-1.2.1.md)。v1.3.0 使用上表的当前显示配置，验证了实际最大化尺寸和屏幕尺寸模式在工具重启后保留，再次系统最大化时可见外框正确覆盖工作区。反馈中的旧版异常未在本机稳定复现；异常位置修复和顶部兜底分支未通过故障注入触发，不能把结果解释为所有程序和显示环境均已验证。详见[本版验证记录](docs/VALIDATION.md)。
 
 ## 轻量实现与资源
 
-界面使用 Windows 原生控件与 GDI，没有 Electron、WebView、.NET 或 Python 运行依赖。静态 C++ 运行库，v1.2.1 x64 EXE 为 **174,592 字节（170.5 KiB）**。
+界面使用 Windows 原生控件与 GDI，没有 Electron、WebView、.NET 或 Python 运行依赖。静态 C++ 运行库，v1.3.0 x64 EXE 为 **182,272 字节（178 KiB）**。只有存在等待记录时，才每秒枚举一次窗口寻找匹配；全部连接后不执行重新发现。配置只在设置改变时写入。
 
-通过 WinEvent 事件通知恢复尺寸，配合 1 秒检查兜底及待稳定时的 80 ms 检查；常规纠正尝试间隔约 60 ms，持续冲突超过 3 秒后降至约 500 ms。旧版 v1.2.0 后台收起、两个目标启用且静止的本机 20 秒采样：专用内存约 **3.00 MiB**，工作集约 **19.73 MiB**，CPU 时间增量约 **0.234 秒**，折合一个逻辑处理器约 **1.17%**。这是历史样本，v1.2.1 未重新进行相同条件的资源采样，不能作为新版测量值或所有电脑的表现保证。详见[旧版记录](docs/VALIDATION-1.2.0.md)。
+通过 WinEvent 事件通知恢复尺寸，配合 1 秒检查兜底及待稳定时的 80 ms 检查；常规纠正尝试间隔约 60 ms，持续冲突超过 3 秒后降至约 500 ms。旧版 v1.2.0 后台收起、两个目标启用且静止的本机 20 秒采样：专用内存约 **3.00 MiB**，工作集约 **19.73 MiB**，CPU 时间增量约 **0.234 秒**，折合一个逻辑处理器约 **1.17%**。这是历史样本，v1.3.0 未重新进行相同条件的资源采样，不能作为新版测量值或所有电脑的表现保证。详见[旧版记录](docs/VALIDATION-1.2.0.md)。
 
 ## 兼容范围
 
@@ -90,10 +106,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\src\build.ps1
 
 ## 数据与许可
 
-正常运行不创建配置或日志，不读取目标文档内容，不联网，不修改目标程序文件，不安装驱动或服务。窗口标题与尺寸仅用于本地显示。源码保留以 `.diagnostics` 标记启用本地验证日志的开发入口，发布包不包含该标记或原始日志。
+正常运行会在上述用户本地目录保存窗口标题、程序路径、窗口类型、尺寸与启用状态，不读取目标文档内容，不联网，不修改目标程序文件，不安装驱动或服务。配置没有加密，分享或备份时请留意本地标题和路径。正常使用不创建诊断日志；源码保留以 `.diagnostics` 标记启用本地验证日志的开发入口，发布包不包含配置、该标记或原始日志。
 
 本项目为独立编写的实现，采用 [MIT License](LICENSE)。
 
 ## English
 
 A tiny, portable native Windows utility that captures and restores the outer size of selected windows. Manage up to 32 targets with independent sizes and selective or batch enable, pause and removal. Drag the blue picker onto a window, use the multi-select list, or press `Ctrl + Alt + Z`. Edit width and height and apply to the window shown in the detail pane. `Ctrl + Alt + U` removes only the foreground target. Moving is allowed; minimizing pauses enforcement. Version 1.2.1 waits for stable geometry and state, preserves screen-sized maximization and verifies visible work-area coverage with bounded placement repair. Maximize and top snap passed classic Notepad tests, but the reported old-version failure was not reliably reproduced and repair fallback branches were not fault-injection tested. The panel shows monitor resolution, work area, outer size and visible frame bounds. No external runtime or installation required. Windows 11 x64 tested with two targets; Windows 10 and mixed-DPI displays have not been physically tested.
+
+Version 1.3.0 persists records in `%LOCALAPPDATA%\WindowSizeLock\settings.dat`. Closing a target or exiting the utility preserves dimensions, enabled/paused state and screen-size mode. Reconnection requires a unique match of executable path, window class and normalized title. Offline records can be edited and paused. Removal deletes the saved record. Titles and paths are stored locally without encryption; document contents are not read. Same-title documents cannot be distinguished by document path. The final 178 KiB executable passed Windows 11 close/reopen, utility restart, offline editing, paused reattachment, two-record independence and corrupt-file rejection tests.

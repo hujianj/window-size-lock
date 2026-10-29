@@ -8,6 +8,8 @@
 #include <shellapi.h>
 #include <strsafe.h>
 #include <dwmapi.h>
+#include <cstddef>
+#include <cwchar>
 
 // All state and WinEvent callbacks belong to the main message-loop thread.
 enum { ID_LIST=101, ID_LOCK, ID_UNLOCK, ID_REFRESH, ID_PICK, ID_HIDE, ID_EXIT,
@@ -19,6 +21,8 @@ constexpr UINT_PTR TIMER_WATCH=1, TIMER_SETTLE=2;
 constexpr int MaxTargets=32;
 struct Candidate { HWND hwnd; DWORD pid; };
 struct Target {
+    bool saved{};
+    wchar_t executable[1024]{},windowClass[256]{},title[256]{};
     HWND hwnd{}; DWORD pid{}; HANDLE process{};
     int width{},height{},remaxAttempts{};
     bool enabled{},destroyed{},moving{},movingTitle{},captureMax{},haveLog{},logMin{},logMax{},screenSized{};
@@ -44,6 +48,10 @@ static constexpr COLORREF Background=RGB(245,247,251),Card=RGB(255,255,255),
 enum class BadgeState { Ready,Active,Paused,Picking };
 static BadgeState badgeState=BadgeState::Ready;
 static HWND hoveredButton,detailWindow;
+static int detailSlot=-1;
+static wchar_t settingsPath[1200]{};
+static bool settingsDirty;
+static ULONGLONG saveAttempt;
 static Candidate candidates[512];
 static int candidateCount;
 static bool queued,picking,trayAdded;
@@ -90,7 +98,7 @@ static void Log(const wchar_t* message) {
 }
 
 static void StartDiagnostics() {
-    // Local test opt-in. Normal use creates no log or configuration file.
+    // Local test opt-in. Normal use creates settings but no diagnostics log.
     wchar_t marker[MAX_PATH+32];
     GetModuleFileNameW(nullptr,marker,MAX_PATH);
     StringCchCatW(marker,MAX_PATH+32,L".diagnostics");
@@ -103,7 +111,7 @@ static void StartDiagnostics() {
     for(wchar_t* p=path;*p;++p) if(*p==L'\r'||*p==L'\n') { *p=0; break; }
     if(!path[0]) return;
     logFile=CreateFileW(path,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
-    Log(L"START version=1.2.1");
+    Log(L"START version=1.3.0");
 }
 
 static RECT BadgeRect() {
@@ -115,7 +123,7 @@ static int FindTarget(HWND h) {
     return -1;
 }
 static int CountTargets(bool enabledOnly=false) {
-    int n=0; for(const auto& t:targets) if(t.hwnd && (!enabledOnly||t.enabled)) ++n;
+    int n=0; for(const auto& t:targets) if(t.saved && (!enabledOnly||t.enabled)) ++n;
     return n;
 }
 static void UpdateBadge() {
@@ -133,6 +141,90 @@ static void UpdateBadge() {
     if(changed||next!=badgeState) { badgeState=next; RECT r=BadgeRect(); InvalidateRect(mainWindow,&r,FALSE); InvalidateRect(badgeLabel,nullptr,TRUE); }
 }
 static void Status(const wchar_t* message) { SetText(statusLabel,message); UpdateBadge(); }
+
+// Explicit, bounded disk format: no HWND, PID, pointers or runtime state.
+struct SavedRecord {
+    DWORD width,height,flags;
+    wchar_t executable[1024],windowClass[256],title[256];
+};
+struct SavedFile { DWORD magic,version,count; SavedRecord records[MaxTargets]; };
+static SavedFile settingsBuffer;
+static constexpr DWORD SettingsMagic=0x4B4C5357;
+static void InitializeSettings() {
+    wchar_t folder[1100];
+    DWORD n=GetEnvironmentVariableW(L"LOCALAPPDATA",folder,1024);
+    if(!n||n>=1024) return;
+    if(FAILED(StringCchCatW(folder,1100,L"\\WindowSizeLock"))) return;
+    if(!CreateDirectoryW(folder,nullptr)&&GetLastError()!=ERROR_ALREADY_EXISTS) return;
+    StringCchPrintfW(settingsPath,1200,L"%s\\settings.dat",folder);
+}
+static bool SaveSettings() {
+    settingsDirty=true; saveAttempt=GetTickCount64();
+    auto& file=settingsBuffer; file={}; file.magic=SettingsMagic; file.version=1;
+    for(const auto& t:targets) if(t.saved) {
+        auto& r=file.records[file.count++];
+        r.width=t.width; r.height=t.height; r.flags=(t.enabled?1:0)|(t.screenSized?2:0);
+        StringCchCopyW(r.executable,1024,t.executable); StringCchCopyW(r.windowClass,256,t.windowClass); StringCchCopyW(r.title,256,t.title);
+    }
+    wchar_t temporary[1240]; StringCchPrintfW(temporary,1240,L"%s.tmp",settingsPath);
+    HANDLE h=settingsPath[0]?CreateFileW(temporary,GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr):INVALID_HANDLE_VALUE;
+    bool ok=false;
+    if(h!=INVALID_HANDLE_VALUE) {
+        DWORD bytes=static_cast<DWORD>(offsetof(SavedFile,records)+file.count*sizeof(SavedRecord)),written=0;
+        ok=WriteFile(h,&file,bytes,&written,nullptr)&&written==bytes&&FlushFileBuffers(h);
+        CloseHandle(h);
+        if(ok) ok=MoveFileExW(temporary,settingsPath,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=FALSE;
+    }
+    if(ok) settingsDirty=false;
+    else if(IsWindow(statusLabel)) Status(L"配置暂未写入成功，请检查本地配置目录的空间或写入权限。将自动重试。");
+    return ok;
+}
+static void LoadSettings() {
+    if(!settingsPath[0]) { Status(L"无法访问本地配置目录，本次记录暂不能保存。"); return; }
+    HANDLE h=CreateFileW(settingsPath,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(h==INVALID_HANDLE_VALUE) { if(GetLastError()!=ERROR_FILE_NOT_FOUND) Status(L"配置无法读取，请检查本地目录权限。"); return; }
+    auto& file=settingsBuffer; file={}; DWORD got=0;
+    LARGE_INTEGER size={};
+    bool ok=GetFileSizeEx(h,&size)&&size.QuadPart>=offsetof(SavedFile,records)&&size.QuadPart<=sizeof file;
+    if(ok) ok=ReadFile(h,&file,sizeof file,&got,nullptr)!=FALSE;
+    CloseHandle(h);
+    ok=ok&&file.magic==SettingsMagic&&file.version==1&&file.count<=MaxTargets&&
+        got==offsetof(SavedFile,records)+file.count*sizeof(SavedRecord);
+    for(DWORD k=0;ok&&k<file.count;++k) {
+        const auto& r=file.records[k];
+        ok=r.width>=1&&r.width<=32767&&r.height>=1&&r.height<=32767&&r.flags<=3&&
+            r.executable[0]&&r.windowClass[0]&&r.title[0]&&
+            wmemchr(r.executable,0,1024)&&wmemchr(r.windowClass,0,256)&&wmemchr(r.title,0,256);
+    }
+    if(!ok) { Status(L"配置文件损坏或版本不支持，未载入；原文件保留，重新选取将创建新配置。"); return; }
+    for(DWORD k=0;k<file.count;++k) {
+        const auto& r=file.records[k]; auto& t=targets[k]; t.saved=true;
+        t.width=r.width; t.height=r.height; t.enabled=(r.flags&1)!=0; t.screenSized=(r.flags&2)!=0;
+        StringCchCopyW(t.executable,1024,r.executable); StringCchCopyW(t.windowClass,256,r.windowClass); StringCchCopyW(t.title,256,r.title);
+    }
+    if(file.count) Status(L"已读取保存的固定记录，等待相同程序、窗口类型和标题的窗口。");
+}
+static void NormalizedTitle(HWND h,wchar_t* title) {
+    wchar_t raw[256]={}; GetWindowTextW(h,raw,256);
+    // Classic Notepad prefixes its title with '*' while the document is dirty.
+    const wchar_t* p=raw; if(*p==L'*') ++p;
+    StringCchCopyW(title,256,p);
+}
+static bool ReadIdentity(HWND h,Target& identity) {
+    DWORD pid=0; GetWindowThreadProcessId(h,&pid);
+    HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid);
+    DWORD length=1024;
+    bool ok=process&&QueryFullProcessImageNameW(process,0,identity.executable,&length);
+    if(process) CloseHandle(process);
+    if(!ok||!GetClassNameW(h,identity.windowClass,256)) return false;
+    NormalizedTitle(h,identity.title); return identity.title[0]!=0;
+}
+static bool SameIdentity(const Target& a,const Target& b) {
+    return lstrcmpiW(a.executable,b.executable)==0&&lstrcmpW(a.windowClass,b.windowClass)==0&&lstrcmpW(a.title,b.title)==0;
+}
+static int DetailIndex() {
+    return detailSlot>=0&&detailSlot<MaxTargets&&targets[detailSlot].saved?detailSlot:FindTarget(detailWindow);
+}
 static void UpdateTray() {
     if(!trayAdded) return;
     int active=CountTargets(true),total=CountTargets();
@@ -158,6 +250,7 @@ static bool TargetValid(const Target& t) {
     return pid==t.pid && (!t.process||WaitForSingleObject(t.process,0)!=WAIT_OBJECT_0);
 }
 static const wchar_t* TargetState(const Target& t) {
+    if(!t.hwnd) return t.enabled?L"等待窗口":L"暂停·等待";
     if(!t.enabled) return L"已暂停";
     if(IsIconic(t.hwnd)) return L"最小化";
     if(!IsWindowVisible(t.hwnd)) return L"已隐藏";
@@ -200,7 +293,7 @@ static bool FillsWorkArea(HWND h,const RECT& outer) {
         visible.right>=m.rcWork.right-2 && visible.bottom>=m.rcWork.bottom-2;
 }
 static void FillInputs() {
-    int i=FindTarget(detailWindow); RECT r={};
+    int i=DetailIndex(); RECT r={};
     bool ok=detailWindow && IsWindow(detailWindow) && !IsIconic(detailWindow) && GetWindowRect(detailWindow,&r);
     wchar_t text[32];
     int w=i>=0?targets[i].width:ok?static_cast<int>(r.right-r.left):0;
@@ -209,14 +302,14 @@ static void FillInputs() {
     if(h) StringCchPrintfW(text,32,L"%d",h); else text[0]=0; SetText(heightEdit,text);
 }
 static void UpdateDetail(bool fillInputs=false) {
-    HWND h=detailWindow;
-    bool valid=h && IsWindow(h); int i=FindTarget(h);
+    int i=DetailIndex(); HWND h=i>=0?targets[i].hwnd:detailWindow;
+    bool valid=h && IsWindow(h);
     wchar_t text[512],name[256]={};
     if(valid) GetWindowTextW(h,name,256);
-    SetText(targetLabel,valid?(name[0]?name:L"未命名窗口"):L"选择窗口，查看尺寸或修改");
+    SetText(targetLabel,valid?(name[0]?name:L"未命名窗口"):i>=0?targets[i].title:L"选择窗口，查看尺寸或修改");
     RECT r={}; bool got=valid && !IsIconic(h) && GetWindowRect(h,&r);
     if(got) StringCchPrintfW(text,512,L"%ld × %ld",r.right-r.left,r.bottom-r.top);
-    else StringCchCopyW(text,512,valid?L"已最小化":L"— × —");
+    else StringCchCopyW(text,512,valid?L"已最小化":i>=0?L"窗口未打开":L"— × —");
     SetText(currentSizeLabel,text);
     RECT visible={}; bool dwm=got && SUCCEEDED(DwmGetWindowAttribute(h,DWMWA_EXTENDED_FRAME_BOUNDS,&visible,sizeof visible));
     if(dwm) StringCchPrintfW(text,512,L"可见外框：%ld × %ld px",visible.right-visible.left,visible.bottom-visible.top);
@@ -231,14 +324,15 @@ static void UpdateDetail(bool fillInputs=false) {
         StringCchPrintfW(text,512,L"%s · %s",TargetState(t),t.screenSized?L"屏幕尺寸，允许最大化":L"按设定宽高固定");
     } else StringCchCopyW(text,512,valid?L"仅查看 · 点击应用尺寸即可加入固定":L"未选择 · 当前显示本面板所在屏幕");
     SetText(modeLabel,text);
-    EnableWindow(widthEdit,valid); EnableWindow(heightEdit,valid);
-    EnableWindow(applyButton,valid); EnableWindow(maxSizeButton,valid);
+    EnableWindow(widthEdit,valid||i>=0); EnableWindow(heightEdit,valid||i>=0);
+    EnableWindow(applyButton,valid||i>=0); EnableWindow(maxSizeButton,valid);
     if(fillInputs) FillInputs();
 }
 static void UpdateManaged() {
     bool changed=false; int n=0;
-    for(auto& t:targets) if(t.hwnd) {
-        wchar_t title[256]={},row[512]; GetWindowTextW(t.hwnd,title,256);
+    for(auto& t:targets) if(t.saved) {
+        wchar_t title[256]={},row[512];
+        if(t.hwnd) GetWindowTextW(t.hwnd,title,256); else StringCchCopyW(title,256,t.title);
         StringCchPrintfW(row,512,L"[%s] %s  ·  %d × %d",TargetState(t),title[0]?title:L"未命名窗口",t.width,t.height);
         if(lstrcmpW(t.row,row)!=0) { StringCchCopyW(t.row,512,row); changed=true; } ++n;
     }
@@ -248,7 +342,7 @@ static void UpdateManaged() {
         LRESULT count=SendMessageW(managedBox,LB_GETSELITEMS,MaxTargets,reinterpret_cast<LPARAM>(indices));
         for(int k=0;k<count;++k) { LRESULT slot=SendMessageW(managedBox,LB_GETITEMDATA,indices[k],0); if(slot>=0&&slot<MaxTargets) selected[slot]=true; }
         SendMessageW(managedBox,WM_SETREDRAW,FALSE,0); SendMessageW(managedBox,LB_RESETCONTENT,0,0);
-        for(int k=0;k<MaxTargets;++k) if(targets[k].hwnd) {
+        for(int k=0;k<MaxTargets;++k) if(targets[k].saved) {
             LRESULT row=SendMessageW(managedBox,LB_ADDSTRING,0,reinterpret_cast<LPARAM>(targets[k].row));
             SendMessageW(managedBox,LB_SETITEMDATA,row,k);
             if(selected[k]) SendMessageW(managedBox,LB_SETSEL,TRUE,row);
@@ -269,16 +363,26 @@ static void SelectManaged(HWND h) {
             SendMessageW(managedBox,LB_SETSEL,TRUE,k); SendMessageW(managedBox,LB_SETCARETINDEX,k,FALSE); break;
         }
     }
-    detailWindow=h; UpdateManaged(); UpdateDetail(true);
+    detailWindow=h; detailSlot=FindTarget(h); UpdateManaged(); UpdateDetail(true);
+}
+static void DetachTarget(Target& t) {
+    HWND old=t.hwnd;
+    if(t.objectHook) UnhookWinEvent(t.objectHook); if(t.systemHook) UnhookWinEvent(t.systemHook);
+    if(t.process) CloseHandle(t.process);
+    // Preserve only configuration; discard all state belonging to the old HWND.
+    Target kept{}; kept.saved=t.saved; kept.width=t.width; kept.height=t.height;
+    kept.enabled=t.enabled; kept.screenSized=t.screenSized;
+    StringCchCopyW(kept.executable,1024,t.executable); StringCchCopyW(kept.windowClass,256,t.windowClass); StringCchCopyW(kept.title,256,t.title);
+    t=kept;
+    if(detailWindow==old) detailWindow=nullptr;
 }
 static void ReleaseTarget(Target& t) {
-    if(!t.hwnd) return;
-    wchar_t text[128]; StringCchPrintfW(text,128,L"UNLOCK hwnd=%p",t.hwnd); Log(text);
-    if(t.objectHook) UnhookWinEvent(t.objectHook); if(t.systemHook) UnhookWinEvent(t.systemHook);
-    if(t.process) CloseHandle(t.process); t=Target{};
+    int i=static_cast<int>(&t-targets); DetachTarget(t); t=Target{};
+    if(detailSlot==i) { detailSlot=-1; detailWindow=nullptr; }
 }
 static void UnlockAll(const wchar_t* message) {
     for(auto& t:targets) ReleaseTarget(t);
+    SaveSettings();
     KillTimer(mainWindow,TIMER_SETTLE); UpdateManaged(); UpdateDetail(true); Status(message);
 }
 static void QueueCheck() {
@@ -317,6 +421,34 @@ static void CALLBACK WindowEvent(HWINEVENTHOOK,DWORD event,HWND hwnd,LONG object
     if(event==EVENT_SYSTEM_MINIMIZEEND) t.settleUntil=now+200;
     QueueCheck();
 }
+static void BindTarget(Target& t,HWND hwnd) {
+    t.hwnd=hwnd; GetWindowThreadProcessId(hwnd,&t.pid);
+    t.process=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,t.pid);
+    t.objectHook=SetWinEventHook(EVENT_OBJECT_DESTROY,EVENT_OBJECT_LOCATIONCHANGE,nullptr,WindowEvent,t.pid,0,WINEVENT_OUTOFCONTEXT|WINEVENT_SKIPOWNPROCESS);
+    t.systemHook=SetWinEventHook(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_MINIMIZEEND,nullptr,WindowEvent,t.pid,0,WINEVENT_OUTOFCONTEXT|WINEVENT_SKIPOWNPROCESS);
+    t.settleUntil=GetTickCount64()+400;
+    if(DetailIndex()==static_cast<int>(&t-targets)) detailWindow=hwnd;
+    Log(L"BIND_SAVED_TARGET"); QueueCheck();
+}
+static void ReconnectTargets() {
+    bool waiting=false; for(const auto& t:targets) if(t.saved&&!t.hwnd) { waiting=true; break; }
+    if(!waiting) return;
+    struct Discovery { HWND match[MaxTargets]{}; int count[MaxTargets]{}; } discovery;
+    EnumWindows([](HWND h,LPARAM data)->BOOL {
+        if(!IsWindowVisible(h)||FindTarget(h)>=0) return TRUE;
+        DWORD pid=0; GetWindowThreadProcessId(h,&pid); if(pid==GetCurrentProcessId()) return TRUE;
+        if(GetWindowLongPtrW(h,GWL_EXSTYLE)&WS_EX_TOOLWINDOW) return TRUE;
+        Target identity{}; if(!ReadIdentity(h,identity)) return TRUE;
+        auto& d=*reinterpret_cast<Discovery*>(data);
+        for(int i=0;i<MaxTargets;++i) if(targets[i].saved&&!targets[i].hwnd&&SameIdentity(targets[i],identity)) { d.match[i]=h; ++d.count[i]; }
+        return TRUE;
+    },reinterpret_cast<LPARAM>(&discovery));
+    for(int i=0;i<MaxTargets;++i) if(discovery.count[i]==1) {
+        int records=0; for(const auto& t:targets) if(t.saved&&SameIdentity(t,targets[i])) ++records;
+        // Neither duplicate saved identities nor multiple live matches are safe.
+        if(records==1&&FindTarget(discovery.match[i])<0) BindTarget(targets[i],discovery.match[i]);
+    }
+}
 static void Observe(Target& t,const RECT& r,bool minimized,bool maximized) {
     if(logFile==INVALID_HANDLE_VALUE) return;
     if(!t.haveLog||!EqualRect(&r,&t.logRect)||minimized!=t.logMin||maximized!=t.logMax) {
@@ -330,7 +462,9 @@ static void CheckTargets() {
     queued=false; ULONGLONG now=GetTickCount64(); bool soon=false;
     for(auto& t:targets) {
         if(!t.hwnd) continue;
-        if(!TargetValid(t)) { bool detail=t.hwnd==detailWindow; ReleaseTarget(t); if(detail) detailWindow=nullptr; Status(L"一个目标已关闭，其余窗口继续固定。"); continue; }
+        if(!TargetValid(t)) { DetachTarget(t); Status(L"目标已关闭，尺寸和启用状态已保留；相同窗口打开后自动恢复。"); continue; }
+        wchar_t title[256]; NormalizedTitle(t.hwnd,title);
+        if(title[0]&&lstrcmpW(t.title,title)!=0) { StringCchCopyW(t.title,256,title); settingsDirty=true; }
         RECT r; if(!GetWindowRect(t.hwnd,&r)) continue;
         bool min=IsIconic(t.hwnd)!=FALSE,max=IsZoomed(t.hwnd)!=FALSE;
         Observe(t,r,min,max);
@@ -344,12 +478,12 @@ static void CheckTargets() {
                 t.remaxPending=false; ShowWindowAsync(t.hwnd,SW_MAXIMIZE); t.settleUntil=now+400;
                 Log(L"REAPPLY_MAXIMIZE"); soon=true; continue;
             } else if(now<t.remaxUntil) { soon=true; continue; }
-            else { t.remaxPending=false; t.enabled=false; Status(L"目标未响应最大化位置修复，已暂停；可重新启用或检查目标权限。"); continue; }
+            else { t.remaxPending=false; t.enabled=false; settingsDirty=true; Status(L"目标未响应最大化位置修复，已暂停；可重新启用或检查目标权限。"); continue; }
         }
         if(t.captureMax) {
             if(max && stable && FillsWorkArea(t.hwnd,r)) {
                 t.width=r.right-r.left; t.height=r.bottom-r.top; t.captureMax=false; t.screenSized=true;
-                if(detailWindow==t.hwnd) FillInputs(); Status(L"已记录稳定的最大化尺寸，并核对窗口铺满工作区。");
+                SaveSettings(); if(detailWindow==t.hwnd) FillInputs(); Status(L"已记录稳定的最大化尺寸，并核对窗口铺满工作区。");
             } else if(now<t.captureUntil) { soon=true; continue; }
             else { t.captureMax=false; Status(L"目标未响应最大化，请检查目标程序是否支持最大化。"); }
         }
@@ -369,7 +503,7 @@ static void CheckTargets() {
             // Clear a malformed maximized placement through Windows itself.
             // Wait for the restore to settle before issuing maximize again.
             if(t.remaxAttempts>=2) {
-                t.enabled=false; Status(L"目标最大化后仍未覆盖工作区，已暂停该目标。可检查目标的尺寸限制后重新启用。"); continue;
+                t.enabled=false; settingsDirty=true; Status(L"目标最大化后仍未覆盖工作区，已暂停该目标。可检查目标的尺寸限制后重新启用。"); continue;
             }
             ++t.remaxAttempts;
             success=ShowWindowAsync(t.hwnd,SW_RESTORE);
@@ -383,7 +517,7 @@ static void CheckTargets() {
                 SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_NOOWNERZORDER|SWP_ASYNCWINDOWPOS);
             wchar_t text[256]; StringCchPrintfW(text,256,L"CORRECT hwnd=%p width=%d height=%d accepted=%d",t.hwnd,t.width,t.height,success); Log(text);
         }
-        if(!success) { t.enabled=false; Status(L"一个目标无法调整，已暂停该目标；请检查是否需要与目标相同的权限。"); }
+        if(!success) { t.enabled=false; settingsDirty=true; Status(L"一个目标无法调整，已暂停该目标；请检查是否需要与目标相同的权限。"); }
         else if(now-t.mismatchSince>3000) Status(L"目标限制尺寸或持续改写大小，正在降低频率重试。可暂停该目标。");
         soon=true;
     }
@@ -399,15 +533,19 @@ static bool LockWindow(HWND hwnd,DWORD expectedPid=0) {
     if(i>=0) { SelectManaged(hwnd); Status(L"这个窗口已在管理列表中。可修改尺寸或启用、暂停。"); return true; }
     if(IsIconic(hwnd)) { Status(L"请先还原最小化窗口，再读取并固定尺寸。"); return false; }
     RECT r; if(!GetWindowRect(hwnd,&r)||r.right<=r.left||r.bottom<=r.top) return false;
-    for(i=0;i<MaxTargets;++i) if(!targets[i].hwnd) break;
+    Target identity{};
+    if(!ReadIdentity(hwnd,identity)) { Status(L"无法读取程序路径或窗口标题，请检查目标权限后重试。"); return false; }
+    int waiting=-1,matches=0;
+    for(i=0;i<MaxTargets;++i) if(targets[i].saved&&!targets[i].hwnd&&SameIdentity(targets[i],identity)) { waiting=i; ++matches; }
+    if(matches>1) { Status(L"有多条相同窗口记录，请移除重复记录后重新选取。"); return false; }
+    if(matches==1) { BindTarget(targets[waiting],hwnd); UpdateManaged(); SelectManaged(hwnd); Status(L"已重新连接保存的记录，保留原尺寸和启用状态。"); return true; }
+    for(i=0;i<MaxTargets;++i) if(!targets[i].saved) break;
     if(i==MaxTargets) { Status(L"最多同时管理 32 个窗口。请先移除不需要的目标。"); return false; }
-    auto& t=targets[i]; t.hwnd=hwnd; t.pid=pid; t.enabled=true;
+    auto& t=targets[i]; t=identity; t.saved=true; t.hwnd=hwnd; t.pid=pid; t.enabled=true;
     t.width=r.right-r.left; t.height=r.bottom-r.top;
     t.screenSized=IsZoomed(hwnd)!=FALSE || ScreenDimensions(t);
     if(IsZoomed(hwnd)) { t.captureMax=true; t.captureUntil=GetTickCount64()+2500; }
-    t.process=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid);
-    t.objectHook=SetWinEventHook(EVENT_OBJECT_DESTROY,EVENT_OBJECT_LOCATIONCHANGE,nullptr,WindowEvent,pid,0,WINEVENT_OUTOFCONTEXT|WINEVENT_SKIPOWNPROCESS);
-    t.systemHook=SetWinEventHook(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_MINIMIZEEND,nullptr,WindowEvent,pid,0,WINEVENT_OUTOFCONTEXT|WINEVENT_SKIPOWNPROCESS);
+    BindTarget(t,hwnd); SaveSettings();
     wchar_t text[256]; StringCchPrintfW(text,256,L"LOCK hwnd=%p pid=%lu width=%d height=%d",hwnd,pid,t.width,t.height); Log(text);
     UpdateManaged(); SelectManaged(hwnd); QueueCheck();
     Status(IsZoomed(hwnd)?L"已加入固定，并保留最大化状态。最大化尺寸不会再被强制还原。":L"已加入固定。可继续添加其他窗口，或在右侧修改尺寸。");
@@ -431,8 +569,8 @@ static void RefreshList() {
 static void PreviewSelected(HWND box) {
     LRESULT caret=SendMessageW(box,LB_GETCARETINDEX,0,0);
     LRESULT data=caret==LB_ERR?LB_ERR:SendMessageW(box,LB_GETITEMDATA,caret,0);
-    if(box==listBox) { if(data>=0&&data<candidateCount) detailWindow=candidates[data].hwnd; }
-    else if(data>=0&&data<MaxTargets) detailWindow=targets[data].hwnd;
+    if(box==listBox) { if(data>=0&&data<candidateCount) { detailWindow=candidates[data].hwnd; detailSlot=FindTarget(detailWindow); } }
+    else if(data>=0&&data<MaxTargets) { detailSlot=static_cast<int>(data); detailWindow=targets[data].hwnd; }
     UpdateDetail(true); UpdateManaged();
 }
 static void LockSelected() {
@@ -451,7 +589,7 @@ static void ManageSelected(int action) {
         if(action==ID_UNLOCK) ReleaseTarget(t);
         else { t.enabled=action==ID_ENABLE; t.captureMax=false; t.remaxPending=false; t.remaxAttempts=0; t.mismatchSince=0; t.lastAttempt=0; }
     }
-    UpdateManaged(); UpdateDetail(true); QueueCheck();
+    SaveSettings(); UpdateManaged(); UpdateDetail(true); QueueCheck();
     Status(action==ID_UNLOCK?L"已移除所选目标。其余窗口继续固定。":action==ID_ENABLE?L"已启用所选目标，恢复各自的固定尺寸。":L"已暂停所选目标，可自由调整；其他窗口继续固定。");
 }
 static bool ReadDimension(HWND edit,int& value) {
@@ -460,13 +598,13 @@ static bool ReadDimension(HWND edit,int& value) {
     return value>=1;
 }
 static void ApplySize(bool useMax) {
-    HWND h=detailWindow; int w=0,height=0;
+    int i=DetailIndex(); HWND h=i>=0?targets[i].hwnd:detailWindow; int w=0,height=0;
     if(!useMax && (!ReadDimension(widthEdit,w)||!ReadDimension(heightEdit,height))) {
         Status(L"宽、高请输入 1–32767 的整数像素值。目标程序可能另有最小尺寸限制。"); return;
     }
-    if(!h||!IsWindow(h)) { Status(L"请先选择窗口。"); return; }
-    if(FindTarget(h)<0 && !LockWindow(h)) return;
-    int i=FindTarget(h); if(i<0) return; auto& t=targets[i];
+    if(useMax&&(!h||!IsWindow(h))) { Status(L"请先打开目标窗口，再读取最大化尺寸。"); return; }
+    if(i<0) { if(!h||!IsWindow(h)||!LockWindow(h)) return; i=FindTarget(h); }
+    if(i<0) return; auto& t=targets[i];
     t.enabled=true; t.remaxPending=false; t.remaxAttempts=0; t.mismatchSince=0; t.lastAttempt=0;
     if(useMax) {
         t.captureMax=true; t.captureUntil=GetTickCount64()+2500;
@@ -475,11 +613,11 @@ static void ApplySize(bool useMax) {
     } else {
         t.captureMax=false; t.width=w; t.height=height;
         RECT current={};
-        t.screenSized=ScreenDimensions(t) ||
-            (IsZoomed(h)&&GetWindowRect(h,&current)&&w==current.right-current.left&&height==current.bottom-current.top);
-        Status(L"新尺寸已应用并启用固定，仅修改当前查看的窗口。");
+        t.screenSized=h&&(ScreenDimensions(t) ||
+            (IsZoomed(h)&&GetWindowRect(h,&current)&&w==current.right-current.left&&height==current.bottom-current.top));
+        Status(h?L"新尺寸已应用并启用固定，仅修改当前查看的窗口。":L"新尺寸已保存并启用，目标窗口重新打开后自动应用。");
     }
-    UpdateManaged(); UpdateDetail(true); QueueCheck();
+    SaveSettings(); UpdateManaged(); UpdateDetail(true); QueueCheck();
 }
 
 static HWND PickWindow(POINT point) {
@@ -685,7 +823,7 @@ static void TrayMenu() {
     AppendMenuW(menu,MF_STRING,ID_TRAY_OPEN,L"打开窗口尺寸固定");
     AppendMenuW(menu,MF_STRING|(CountTargets()?0:MF_GRAYED),ID_TRAY_UNLOCK,L"解除全部固定");
     AppendMenuW(menu,MF_SEPARATOR,0,nullptr);
-    AppendMenuW(menu,MF_STRING,ID_TRAY_EXIT,L"退出并解除固定");
+    AppendMenuW(menu,MF_STRING,ID_TRAY_EXIT,L"退出（保留记录）");
     POINT p; GetCursorPos(&p); SetForegroundWindow(mainWindow);
     UINT command=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,mainWindow,nullptr);
     DestroyMenu(menu); PostMessageW(mainWindow,WM_NULL,0,0);
@@ -701,7 +839,7 @@ static LRESULT CALLBACK MainProcedure(HWND hwnd,UINT message,WPARAM wp,LPARAM lp
         mainWindow=hwnd; if(dpiForWindow) dpi=static_cast<int>(dpiForWindow(hwnd)); RecreateFonts();
         auto label=[](const wchar_t* text,DWORD style=SS_LEFT) { return Control(L"STATIC",text,style,0); };
         auto button=[](const wchar_t* text,int id) { return Control(L"BUTTON",text,WS_TABSTOP|BS_OWNERDRAW,id); };
-        brandLabel=label(L"窗口尺寸固定"); hintLabel=label(L"选取即固定，可反复添加多个窗口；选中后也可手动输入宽、高。");
+        brandLabel=label(L"窗口尺寸固定"); hintLabel=label(L"选取即固定；记录自动保存，窗口关闭后保留，重新打开时自动恢复。");
         badgeLabel=label(L"启用 0 / 0",SS_CENTER); targetCaption=label(L"窗口详情 · 所有尺寸均为物理像素");
         targetLabel=label(L"选择窗口，查看尺寸或修改",SS_LEFT|SS_ENDELLIPSIS);
         wantedCaption=label(L"设定外部尺寸 · px"); currentCaption=label(L"当前外部尺寸 · px");
@@ -729,7 +867,7 @@ static LRESULT CALLBACK MainProcedure(HWND hwnd,UINT message,WPARAM wp,LPARAM lp
         RecreateFonts();
         HWND buttons[]={pickerButton,lockButton,refreshButton,unlockButton,hideButton,exitButton,enableButton,pauseButton,allEnableButton,allPauseButton,applyButton,maxSizeButton};
         for(HWND h:buttons) SetWindowSubclass(h,ButtonProcedure,2,0);
-        SetWindowSubclass(pickerButton,PickerProcedure,1,0); RefreshList(); UpdateManaged(); UpdateDetail(true); Layout();
+        SetWindowSubclass(pickerButton,PickerProcedure,1,0); InitializeSettings(); LoadSettings(); RefreshList(); ReconnectTargets(); UpdateManaged(); UpdateDetail(true); Layout();
         captureHotkey=RegisterHotKey(hwnd,1,MOD_CONTROL|MOD_ALT|MOD_NOREPEAT,'Z')!=FALSE;
         unlockHotkey=RegisterHotKey(hwnd,2,MOD_CONTROL|MOD_ALT|MOD_NOREPEAT,'U')!=FALSE;
         if(!captureHotkey||!unlockHotkey) Status(L"部分快捷键被占用，请使用拖动选取或列表。");
@@ -744,8 +882,8 @@ static LRESULT CALLBACK MainProcedure(HWND hwnd,UINT message,WPARAM wp,LPARAM lp
         case ID_MANAGED: if(HIWORD(wp)==LBN_SELCHANGE) PreviewSelected(managedBox); break;
         case ID_UNLOCK: case ID_ENABLE: case ID_PAUSE: ManageSelected(LOWORD(wp)); break;
         case ID_ALL_ENABLE: case ID_ALL_PAUSE:
-            for(auto& t:targets) if(t.hwnd) { t.enabled=LOWORD(wp)==ID_ALL_ENABLE; t.captureMax=false; t.remaxPending=false; t.remaxAttempts=0; t.lastAttempt=0; t.mismatchSince=0; }
-            UpdateManaged(); QueueCheck(); Status(LOWORD(wp)==ID_ALL_ENABLE?L"已启用全部目标，各自恢复记录尺寸。":L"已暂停全部目标，固定尺寸记录仍保留。"); break;
+            for(auto& t:targets) if(t.saved) { t.enabled=LOWORD(wp)==ID_ALL_ENABLE; t.captureMax=false; t.remaxPending=false; t.remaxAttempts=0; t.lastAttempt=0; t.mismatchSince=0; }
+            SaveSettings(); UpdateManaged(); QueueCheck(); Status(LOWORD(wp)==ID_ALL_ENABLE?L"已启用全部目标，各自恢复记录尺寸。":L"已暂停全部目标，固定尺寸记录仍保留。"); break;
         case ID_APPLY: ApplySize(false); break;
         case ID_MAXSIZE: ApplySize(true); break;
         case ID_REFRESH: RefreshList(); Status(L"列表已刷新，单击可查看尺寸，双击加入固定。"); break;
@@ -758,11 +896,12 @@ static LRESULT CALLBACK MainProcedure(HWND hwnd,UINT message,WPARAM wp,LPARAM lp
         if(wp==1) LockWindow(GetForegroundWindow());
         else if(wp==2) {
             int i=FindTarget(GetForegroundWindow());
-            if(i>=0) { ReleaseTarget(targets[i]); UpdateManaged(); UpdateDetail(true); Status(L"已解除前台窗口，其余窗口继续固定。"); }
+            if(i>=0) { ReleaseTarget(targets[i]); SaveSettings(); UpdateManaged(); UpdateDetail(true); Status(L"已解除前台窗口并删除记录，其余窗口继续固定。"); }
         } return 0;
     case WM_SETFOCUS: if(listBox) SetFocus(listBox); return 0;
     case WM_TIMER:
         if(wp==TIMER_SETTLE) KillTimer(hwnd,TIMER_SETTLE);
+        if(wp==TIMER_WATCH) { ReconnectTargets(); if(settingsDirty&&GetTickCount64()-saveAttempt>=1000) SaveSettings(); }
         if(wp==TIMER_WATCH||wp==TIMER_SETTLE) CheckTargets(); return 0;
     case WM_TRAY:
         if(lp==WM_LBUTTONUP||lp==WM_LBUTTONDBLCLK) ShowMain();
@@ -798,7 +937,8 @@ static LRESULT CALLBACK MainProcedure(HWND hwnd,UINT message,WPARAM wp,LPARAM lp
     case WM_CTLCOLORLISTBOX: SetBkColor(reinterpret_cast<HDC>(wp),Card); return reinterpret_cast<LRESULT>(cardBrush);
     case WM_CLOSE: DestroyWindow(hwnd); return 0;
     case WM_DESTROY: {
-        UnlockAll(L""); KillTimer(hwnd,TIMER_WATCH);
+        if(settingsDirty) SaveSettings();
+        for(auto& t:targets) DetachTarget(t); KillTimer(hwnd,TIMER_SETTLE); KillTimer(hwnd,TIMER_WATCH);
         if(captureHotkey) UnregisterHotKey(hwnd,1); if(unlockHotkey) UnregisterHotKey(hwnd,2);
         if(trayAdded) { NOTIFYICONDATAW n={sizeof n}; n.hWnd=hwnd; n.uID=1; Shell_NotifyIconW(NIM_DELETE,&n); }
         if(font) DeleteObject(font); if(titleFont) DeleteObject(titleFont);
