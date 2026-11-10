@@ -65,24 +65,28 @@
 
 | 项目 | 尺寸 |
 | --- | --- |
-| 屏幕分辨率 | 2358 × 1432 px |
-| 最大化工作区 | 2358 × 1384 px |
-| 经典记事本最大化后的外部尺寸 | 2374 × 1400 px |
-| 经典记事本最大化后的可见外框 | 2358 × 1384 px |
+| 屏幕分辨率 | 2344 × 1432 px |
+| 最大化工作区 | 2344 × 1372 px |
+| 经典记事本最大化后的外部尺寸 | 2362 × 1390 px |
+| 经典记事本最大化后的可见外框 | 2344 × 1372 px |
 
 要固定成某个窗口真正的最大化尺寸，选中它后点击 **“使用此窗口的最大化尺寸”**。程序会最大化这个窗口、读取它的实际外部尺寸并固定。也可以先最大化目标，再拖动选取或从列表加入。
 
-v1.2.1 针对“尺寸已等于最大化尺寸，再次最大化却没有正确铺满”的反馈加强处理。读取最大化尺寸前，先等待窗口矩形和最小化/最大化状态连续稳定，并核对可见外框是否覆盖工作区。记录的最大化尺寸被视为屏幕尺寸模式，避免动画、边框或 DPI 的临时差异导致错误还原。手动输入工作区、屏幕尺寸或带系统隐形边框的尺寸，也允许系统最大化。
+v1.3.1 读取最大化尺寸时，等待窗口矩形和最小化/最大化状态连续稳定，并检查可见外框是否处于工作区及系统边框容差内。目标程序可以通过自定义边框或 `WM_GETMINMAXINFO` 指定自己的最大化范围，最大化后比其他窗口略小也可以是合法结果。可见外框是否覆盖整个工作区仅用于说明，不再因为“没有铺满”而强制还原目标。
 
-尺寸相同不代表位置正确。如果窗口报告已最大化，但可见范围没有覆盖工作区，程序会先请求还原，等待稳定后再请求最大化，最多修复两次；目标不响应或持续限制位置时，暂停该目标并提示。普通状态的屏幕尺寸窗口移动到顶部时，另有请求最大化的兜底。固定普通小尺寸时，最大化仍会恢复到设定宽、高。
+成功读取后，右侧显示 **“允许此窗口自身最大化”**，保存实际外部尺寸与该模式。再次最大化时接受目标自身的合法范围；还原到普通状态时恢复记录的固定宽、高。手动输入工作区、屏幕尺寸或带系统隐形边框的尺寸，也允许系统最大化。手动改成普通小尺寸后，最大化仍会恢复到设定宽、高。
 
-v1.2.1 在 Windows 11 经典记事本上通过了点击最大化、顶部吸附、手动工作区尺寸、屏幕尺寸与最大化外部尺寸的历史验证，详见 [v1.2.1 记录](docs/VALIDATION-1.2.1.md)。v1.3.0 使用上表的当前显示配置，验证了实际最大化尺寸和屏幕尺寸模式在工具重启后保留，再次系统最大化时可见外框正确覆盖工作区。反馈中的旧版异常未在本机稳定复现；异常位置修复和顶部兜底分支未通过故障注入触发，不能把结果解释为所有程序和显示环境均已验证。详见[本版验证记录](docs/VALIDATION.md)。
+**VMware Workstation 升级用法：**退出旧版工具，运行 v1.3.1，在管理列表选中 VMware，再点击一次“使用此窗口的最大化尺寸”。如果 VMware 自身最大化后是 `2564 × 1604`，就记录这个结果，无需改成其他窗口的 `2582 × 1622`。确认右侧出现“允许此窗口自身最大化”。旧版记录即使尺寸已相同，也建议重新读取一次，以确认状态与模式。尺寸数字的差异本身不能证明 VMware 的具体边框实现。
+
+尺寸相同仍可能存在位置异常。如果最大化后的可见范围越出工作区及系统边框容差，工具仍会先还原、待稳定后再最大化，最多修复两次；持续越界时暂停该目标并提示。处于工作区内的较小最大化范围会被接受，这是兼容自定义最大化程序的选择。普通状态的最大化尺寸窗口移到顶部时，保留请求最大化的兜底。
+
+本版使用一个通过 `WM_GETMINMAXINFO` 限制最大化范围的测试窗口，实际复现 v1.3.0 在读取超时后强制还原的问题，并确认 v1.3.1 可以读取、保持最大化、再次最大化及重启保留模式；同时验证经典记事本最大化和手动普通尺寸固定。当前机器未安装 VMware Workstation，**尚未进行 VMware 实际程序验证**。详情见[本版验证记录](docs/VALIDATION.md)；持久化完整历史测试见 [v1.3.0 记录](docs/VALIDATION-1.3.0.md)，顶部吸附等历史测试见 [v1.2.1 记录](docs/VALIDATION-1.2.1.md)。
 
 ## 轻量实现与资源
 
-界面使用 Windows 原生控件与 GDI，没有 Electron、WebView、.NET 或 Python 运行依赖。静态 C++ 运行库，v1.3.0 x64 EXE 为 **182,272 字节（178 KiB）**。只有存在等待记录时，才每秒枚举一次窗口寻找匹配；全部连接后不执行重新发现。配置只在设置改变时写入。
+界面使用 Windows 原生控件与 GDI，没有 Electron、WebView、.NET 或 Python 运行依赖。静态 C++ 运行库，v1.3.1 x64 EXE 为 **182,784 字节（178.5 KiB）**。只有存在等待记录时，才每秒枚举一次窗口寻找匹配；全部连接后不执行重新发现。配置只在设置改变时写入。
 
-通过 WinEvent 事件通知恢复尺寸，配合 1 秒检查兜底及待稳定时的 80 ms 检查；常规纠正尝试间隔约 60 ms，持续冲突超过 3 秒后降至约 500 ms。旧版 v1.2.0 后台收起、两个目标启用且静止的本机 20 秒采样：专用内存约 **3.00 MiB**，工作集约 **19.73 MiB**，CPU 时间增量约 **0.234 秒**，折合一个逻辑处理器约 **1.17%**。这是历史样本，v1.3.0 未重新进行相同条件的资源采样，不能作为新版测量值或所有电脑的表现保证。详见[旧版记录](docs/VALIDATION-1.2.0.md)。
+通过 WinEvent 事件通知恢复尺寸，配合 1 秒检查兜底及待稳定时的 80 ms 检查；常规纠正尝试间隔约 60 ms，持续冲突超过 3 秒后降至约 500 ms。旧版 v1.2.0 后台收起、两个目标启用且静止的本机 20 秒采样：专用内存约 **3.00 MiB**，工作集约 **19.73 MiB**，CPU 时间增量约 **0.234 秒**，折合一个逻辑处理器约 **1.17%**。这是历史样本，v1.3.1 未重新进行相同条件的资源采样，不能作为新版测量值或所有电脑的表现保证。详见[旧版记录](docs/VALIDATION-1.2.0.md)。
 
 ## 兼容范围
 
@@ -112,6 +116,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\src\build.ps1
 
 ## English
 
-A tiny, portable native Windows utility that captures and restores the outer size of selected windows. Manage up to 32 targets with independent sizes and selective or batch enable, pause and removal. Drag the blue picker onto a window, use the multi-select list, or press `Ctrl + Alt + Z`. Edit width and height and apply to the window shown in the detail pane. `Ctrl + Alt + U` removes only the foreground target. Moving is allowed; minimizing pauses enforcement. Version 1.2.1 waits for stable geometry and state, preserves screen-sized maximization and verifies visible work-area coverage with bounded placement repair. Maximize and top snap passed classic Notepad tests, but the reported old-version failure was not reliably reproduced and repair fallback branches were not fault-injection tested. The panel shows monitor resolution, work area, outer size and visible frame bounds. No external runtime or installation required. Windows 11 x64 tested with two targets; Windows 10 and mixed-DPI displays have not been physically tested.
+A tiny, portable native Windows utility that captures and restores the outer size of selected windows. Manage up to 32 targets with independent sizes and selective or batch enable, pause and removal. Drag the blue picker onto a window, use the multi-select list, or press `Ctrl + Alt + Z`. Edit width and height and apply to the window shown in the detail pane. `Ctrl + Alt + U` removes only the foreground target. Moving is allowed; minimizing pauses enforcement. Version 1.3.1 accepts stable, contained maximized geometry defined by the target, including custom frames and `WM_GETMINMAXINFO` constraints. Work-area coverage is informational; a smaller valid maximized window no longer triggers restore loops. A constrained native test window reproduced the v1.3.0 capture failure and passed v1.3.1 capture, repeated maximize, minimize/restore and restart tests. Classic Notepad also passed maximum capture and ordinary fixed-size regression. VMware Workstation itself is unavailable locally and has not been tested. After upgrading, select VMware and capture its maximum again. The panel shows monitor resolution, work area, outer size and visible frame bounds. The 178.5 KiB x64 program requires no installation or external runtime. Windows 10 and mixed-DPI displays have not been physically tested.
 
-Version 1.3.0 persists records in `%LOCALAPPDATA%\WindowSizeLock\settings.dat`. Closing a target or exiting the utility preserves dimensions, enabled/paused state and screen-size mode. Reconnection requires a unique match of executable path, window class and normalized title. Offline records can be edited and paused. Removal deletes the saved record. Titles and paths are stored locally without encryption; document contents are not read. Same-title documents cannot be distinguished by document path. The final 178 KiB executable passed Windows 11 close/reopen, utility restart, offline editing, paused reattachment, two-record independence and corrupt-file rejection tests.
+Since version 1.3.0, records persist in `%LOCALAPPDATA%\WindowSizeLock\settings.dat`. Closing a target or exiting the utility preserves dimensions, enabled/paused state and maximization mode. Version 1.3.1 keeps the same configuration format. Reconnection requires a unique match of executable path, window class and normalized title. Offline records can be edited and paused. Removal deletes the saved record. Titles and paths are stored locally without encryption; document contents are not read. Same-title documents cannot be distinguished by document path. Full close/reopen, offline editing, paused reattachment and corrupt-file tests are documented in the historical v1.3.0 validation record.

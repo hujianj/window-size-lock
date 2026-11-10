@@ -111,7 +111,7 @@ static void StartDiagnostics() {
     for(wchar_t* p=path;*p;++p) if(*p==L'\r'||*p==L'\n') { *p=0; break; }
     if(!path[0]) return;
     logFile=CreateFileW(path,FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
-    Log(L"START version=1.3.0");
+    Log(L"START version=1.3.1");
 }
 
 static RECT BadgeRect() {
@@ -264,17 +264,21 @@ static MONITORINFOEXW MonitorInfo(HWND h) {
     GetMonitorInfoW(MonitorFromWindow(h?h:mainWindow,MONITOR_DEFAULTTONEAREST),&info);
     return info;
 }
-static bool ScreenDimensions(const Target& t) {
-    auto m=MonitorInfo(t.hwnd);
-    UINT targetDpi=dpiForWindow?dpiForWindow(t.hwnd):96;
+static SIZE ResizeFrame(HWND h) {
+    UINT targetDpi=h&&dpiForWindow?dpiForWindow(h):96;
     using MetricsFunction=int (WINAPI*)(int,UINT);
     static auto metrics=reinterpret_cast<MetricsFunction>(GetProcAddress(GetModuleHandleW(L"user32.dll"),"GetSystemMetricsForDpi"));
-    int borderX=metrics?metrics(SM_CXSIZEFRAME,targetDpi)+metrics(SM_CXPADDEDBORDER,targetDpi):GetSystemMetrics(SM_CXSIZEFRAME)+GetSystemMetrics(SM_CXPADDEDBORDER);
-    int borderY=metrics?metrics(SM_CYSIZEFRAME,targetDpi)+metrics(SM_CXPADDEDBORDER,targetDpi):GetSystemMetrics(SM_CYSIZEFRAME)+GetSystemMetrics(SM_CXPADDEDBORDER);
+    SIZE border={
+        metrics?metrics(SM_CXSIZEFRAME,targetDpi)+metrics(SM_CXPADDEDBORDER,targetDpi):GetSystemMetrics(SM_CXSIZEFRAME)+GetSystemMetrics(SM_CXPADDEDBORDER),
+        metrics?metrics(SM_CYSIZEFRAME,targetDpi)+metrics(SM_CXPADDEDBORDER,targetDpi):GetSystemMetrics(SM_CYSIZEFRAME)+GetSystemMetrics(SM_CXPADDEDBORDER)};
+    return border;
+}
+static bool ScreenDimensions(const Target& t) {
+    auto m=MonitorInfo(t.hwnd); auto border=ResizeFrame(t.hwnd);
     auto matches=[&](const RECT& r) {
         int w=r.right-r.left,h=r.bottom-r.top;
         return (t.width==w && t.height==h) ||
-            (t.width==w+2*borderX && t.height==h+2*borderY);
+            (t.width==w+2*border.cx && t.height==h+2*border.cy);
     };
     return matches(m.rcWork)||matches(m.rcMonitor);
 }
@@ -291,6 +295,15 @@ static bool FillsWorkArea(HWND h,const RECT& outer) {
     // Covers the work area, allowing the system's invisible frame and rounding.
     return visible.left<=m.rcWork.left+2 && visible.top<=m.rcWork.top+2 &&
         visible.right>=m.rcWork.right-2 && visible.bottom>=m.rcWork.bottom-2;
+}
+static bool ValidMaximizedPlacement(HWND h,const RECT& outer) {
+    // WM_GETMINMAXINFO and custom frames can legitimately produce a smaller
+    // maximized window. Coverage alone must not trigger a restore/maximize loop.
+    auto m=MonitorInfo(h); auto border=ResizeFrame(h); RECT visible={};
+    if(FAILED(DwmGetWindowAttribute(h,DWMWA_EXTENDED_FRAME_BOUNDS,&visible,sizeof visible))) visible=outer;
+    if(visible.right<=visible.left||visible.bottom<=visible.top) return false;
+    return visible.left>=m.rcWork.left-border.cx-2 && visible.top>=m.rcWork.top-border.cy-2 &&
+        visible.right<=m.rcWork.right+border.cx+2 && visible.bottom<=m.rcWork.bottom+border.cy+2;
 }
 static void FillInputs() {
     int i=DetailIndex(); RECT r={};
@@ -321,7 +334,7 @@ static void UpdateDetail(bool fillInputs=false) {
     StringCchPrintfW(text,512,L"最大化工作区：%ld × %ld px",m.rcWork.right-m.rcWork.left,m.rcWork.bottom-m.rcWork.top); SetText(workLabel,text);
     if(i>=0) {
         const auto& t=targets[i];
-        StringCchPrintfW(text,512,L"%s · %s",TargetState(t),t.screenSized?L"屏幕尺寸，允许最大化":L"按设定宽高固定");
+        StringCchPrintfW(text,512,L"%s · %s",TargetState(t),t.screenSized?L"允许此窗口自身最大化":L"按设定宽高固定");
     } else StringCchCopyW(text,512,valid?L"仅查看 · 点击应用尺寸即可加入固定":L"未选择 · 当前显示本面板所在屏幕");
     SetText(modeLabel,text);
     EnableWindow(widthEdit,valid||i>=0); EnableWindow(heightEdit,valid||i>=0);
@@ -481,18 +494,19 @@ static void CheckTargets() {
             else { t.remaxPending=false; t.enabled=false; settingsDirty=true; Status(L"目标未响应最大化位置修复，已暂停；可重新启用或检查目标权限。"); continue; }
         }
         if(t.captureMax) {
-            if(max && stable && FillsWorkArea(t.hwnd,r)) {
+            if(max && stable && ValidMaximizedPlacement(t.hwnd,r)) {
                 t.width=r.right-r.left; t.height=r.bottom-r.top; t.captureMax=false; t.screenSized=true;
-                SaveSettings(); if(detailWindow==t.hwnd) FillInputs(); Status(L"已记录稳定的最大化尺寸，并核对窗口铺满工作区。");
+                SaveSettings(); if(detailWindow==t.hwnd) FillInputs();
+                Status(FillsWorkArea(t.hwnd,r)?L"已记录此窗口自身的最大化尺寸，可见外框覆盖工作区。":L"已记录此窗口自身的最大化尺寸；程序自定义边框或最大化范围可与其他窗口不同。");
             } else if(now<t.captureUntil) { soon=true; continue; }
-            else { t.captureMax=false; Status(L"目标未响应最大化，请检查目标程序是否支持最大化。"); }
+            else { t.captureMax=false; Status(L"未能读取有效的最大化状态或位置，请检查目标是否支持最大化。"); }
         }
         if(!t.enabled||min||!IsWindowVisible(t.hwnd)||t.moving) { t.mismatchSince=0; continue; }
         if(now<t.settleUntil || !stable || r.left<=-30000 || r.top<=-30000) { soon=true; continue; }
         // Matching maximized dimensions are valid. Never restore a maximized
         // window solely because IsZoomed is true (the v1.1 regression).
         bool wrong=max?!MaxSizeMatches(t,r):r.right-r.left!=t.width||r.bottom-r.top!=t.height;
-        bool repairMax=max && MaxSizeMatches(t,r) && !FillsWorkArea(t.hwnd,r);
+        bool repairMax=max && MaxSizeMatches(t,r) && !ValidMaximizedPlacement(t.hwnd,r);
         if(repairMax) wrong=true;
         if(!wrong) { t.mismatchSince=0; if(max) t.remaxAttempts=0; continue; }
         if(!t.mismatchSince) t.mismatchSince=now;
@@ -503,7 +517,7 @@ static void CheckTargets() {
             // Clear a malformed maximized placement through Windows itself.
             // Wait for the restore to settle before issuing maximize again.
             if(t.remaxAttempts>=2) {
-                t.enabled=false; settingsDirty=true; Status(L"目标最大化后仍未覆盖工作区，已暂停该目标。可检查目标的尺寸限制后重新启用。"); continue;
+                t.enabled=false; settingsDirty=true; Status(L"目标最大化后仍位于工作区之外，已暂停该目标。可检查目标的布局或显示设置后重新启用。"); continue;
             }
             ++t.remaxAttempts;
             success=ShowWindowAsync(t.hwnd,SW_RESTORE);
